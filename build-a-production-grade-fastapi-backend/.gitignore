@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/parsing_logs/*
+!storage/parsing_logs/.gitkeep
+storage/compliance_scan_logs/*
+!storage/compliance_scan_logs/.gitkeep
