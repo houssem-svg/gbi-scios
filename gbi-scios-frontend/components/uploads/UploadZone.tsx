@@ -1,8 +1,10 @@
 // src/components/uploads/UploadZone.tsx
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { UploadCloud, FileText, X, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { apiClient } from "@/lib/api";
+import { uploadService } from "@/lib/uploadService";
 
 type UploadFile = {
   id: string;
@@ -16,6 +18,16 @@ export default function UploadZone() {
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [selectedProject, setSelectedProject] = useState("");
+  
+  // حالة (State) لتخزين المشاريع الحقيقية من الداتابيز
+  const [projects, setProjects] = useState<{ id: string; project_name: string }[]>([]);
+
+  // جلب المشاريع عند تحميل الصفحة
+  useEffect(() => {
+    apiClient.get<{ id: string; project_name: string }[]>("/projects")
+      .then((data) => setProjects(data))
+      .catch((err) => console.error("Failed to fetch projects:", err));
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -27,27 +39,7 @@ export default function UploadZone() {
     setIsDragging(false);
   }, []);
 
-  const simulateUpload = (newFile: UploadFile) => {
-    setFiles((prev) => [newFile, ...prev]);
-    
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-        setFiles((prev) =>
-          prev.map((f) => (f.id === newFile.id ? { ...f, progress, status: "success" } : f))
-        );
-      } else {
-        setFiles((prev) =>
-          prev.map((f) => (f.id === newFile.id ? { ...f, progress } : f))
-        );
-      }
-    }, 300);
-  };
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     
@@ -57,14 +49,31 @@ export default function UploadZone() {
     }
 
     const droppedFiles = Array.from(e.dataTransfer.files);
-    droppedFiles.forEach((file) => {
-      simulateUpload({
-        id: Math.random().toString(36).substr(2, 9),
-        name: file.name,
-        size: file.size,
-        progress: 0,
-        status: "uploading",
-      });
+    
+    droppedFiles.forEach(async (file) => {
+      const tempId = Math.random().toString(36).substr(2, 9);
+      setFiles((prev) => [
+        { id: tempId, name: file.name, size: file.size, progress: 0, status: "uploading" },
+        ...prev
+      ]);
+
+      try {
+        await uploadService.uploadFileWithProgress(file, selectedProject, (progress) => {
+          setFiles((prev) =>
+            prev.map((f) => (f.id === tempId ? { ...f, progress } : f))
+          );
+        });
+
+        setFiles((prev) =>
+          prev.map((f) => (f.id === tempId ? { ...f, progress: 100, status: "success" } : f))
+        );
+        
+      } catch (error) {
+        console.error(error);
+        setFiles((prev) =>
+          prev.map((f) => (f.id === tempId ? { ...f, status: "error" } : f))
+        );
+      }
     });
   }, [selectedProject]);
 
@@ -79,14 +88,18 @@ export default function UploadZone() {
           <h2 className="text-lg font-semibold text-slate-100">Upload Workspace</h2>
           <p className="text-sm text-slate-400">Drag and drop BoQ (XLSX, CSV) or Compliance docs (PDF).</p>
         </div>
+        
         <select 
           value={selectedProject}
           onChange={(e) => setSelectedProject(e.target.value)}
           className="bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
         >
           <option value="">Select Target Project...</option>
-          <option value="PRJ-092">PRJ-092: GBI-SCIOS Alpha</option>
-          <option value="PRJ-093">PRJ-093: Riyadh Metro</option>
+          {projects.map((proj) => (
+            <option key={proj.id} value={proj.id}>
+              {proj.project_name}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -128,7 +141,6 @@ export default function UploadZone() {
                 </div>
               </div>
               
-              {/* Progress Bar */}
               <div className="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
                 <div 
                   className={`h-1.5 rounded-full transition-all duration-300 ${

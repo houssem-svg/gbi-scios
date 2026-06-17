@@ -1,71 +1,41 @@
 // src/lib/uploadService.ts
 
-import { apiClient } from "./api";
-import { UploadedFile } from "@/types/upload";
-
-const BASE_URL = "http://127.0.0.1:8000/api/v1";
-
 export const uploadService = {
-  async getFilesByProject(projectId: string): Promise<UploadedFile[]> {
-    return apiClient.get<UploadedFile[]>(`/uploads/project/${projectId}`);
-  },
-
-  async deleteFile(id: string): Promise<void> {
-    return apiClient.delete<void>(`/uploads/${id}`);
-  },
-
-  uploadFileWithProgress(
-    file: File,
-    projectId: string,
+  uploadFileWithProgress: async (
+    file: File, 
+    projectId: string, 
     onProgress: (progress: number) => void
-  ): Promise<UploadedFile> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("project_id", projectId);
+  ): Promise<any> => {
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("project_id", projectId);
 
-      xhr.upload.addEventListener("progress", (event) => {
-        if (event.lengthComputable) {
-          const percentComplete = Math.round((event.loaded / event.total) * 100);
-          onProgress(percentComplete);
-        }
-      });
+    onProgress(10);
 
-      xhr.addEventListener("load", () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const response = JSON.parse(xhr.responseText);
-            resolve(response);
-          } catch (e) {
-            resolve({} as UploadedFile);
-          }
-        } else {
-          let errorMessage = "Upload failed";
-          try {
-            const errorResponse = JSON.parse(xhr.responseText);
-            errorMessage =
-              typeof errorResponse.detail === "string"
-                ? errorResponse.detail
-                : errorResponse.detail?.[0]?.msg || errorMessage;
-          } catch (e) {}
-          reject(new Error(errorMessage));
-        }
-      });
+    // 🚨 استخراج مفتاح الدخول (Token) من المتصفح
+    const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+    
+    const headers: Record<string, string> = {};
+    if (token) {
+      // 🚨 إضافة المفتاح السري للطلب لكي يقبله خادم FastAPI
+      headers["Authorization"] = `Bearer ${token.trim()}`;
+    }
 
-      xhr.addEventListener("error", () => reject(new Error("Network Error")));
-      xhr.addEventListener("abort", () => reject(new Error("Upload Aborted")));
-
-      const cleanEndpoint = "/uploads";
-      xhr.open("POST", `${BASE_URL}${cleanEndpoint}`);
-
-      const token = localStorage.getItem("access_token");
-      if (token) {
-        xhr.setRequestHeader("Authorization", `Bearer ${token.trim()}`);
-      }
-
-      // Do NOT set Content-Type; the browser automatically sets it with the multipart boundary
-      xhr.send(formData);
+    const response = await fetch("http://localhost:8000/api/v1/uploads", {
+      method: "POST",
+      headers: headers, // أضفنا الهيدر هنا
+      body: formData,
     });
-  },
+
+    onProgress(100);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error("Upload Error:", errorData);
+      throw new Error("Failed to upload file");
+    }
+
+    return response.json();
+  }
 };

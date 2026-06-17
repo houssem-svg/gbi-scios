@@ -1,3 +1,5 @@
+// src/lib/api.ts
+
 const BASE_URL = "http://127.0.0.1:8000/api/v1";
 
 interface RequestOptions extends RequestInit {
@@ -8,7 +10,6 @@ export const apiClient = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
     const { params, headers, ...restOptions } = options;
     
-    // تأمين إضافة الـ Slash النهائي لمنع إعادة التوجيه وإسقاط التوكن
     const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
     let url = `${BASE_URL}${cleanEndpoint}`;
     
@@ -19,7 +20,12 @@ export const apiClient = {
 
     const defaultHeaders: Record<string, string> = {};
     
-    if (!(restOptions.body instanceof URLSearchParams)) {
+    // 🚨 التعديل الحاسم الأول: عدم وضع application/json إذا كانت البيانات ملفات (FormData)
+    if (
+      restOptions.body && 
+      !(restOptions.body instanceof URLSearchParams) && 
+      !(restOptions.body instanceof FormData)
+    ) {
       defaultHeaders["Content-Type"] = "application/json";
     }
     
@@ -30,22 +36,25 @@ export const apiClient = {
       }
     }
 
+    // تنظيف الهيدرز من أي قيم undefined
+    const finalHeaders = { ...defaultHeaders, ...headers };
+    Object.keys(finalHeaders).forEach(key => {
+      if ((finalHeaders as any)[key] === undefined) {
+        delete (finalHeaders as any)[key];
+      }
+    });
+
     const config: RequestInit = {
       ...restOptions,
-      headers: {
-        ...defaultHeaders,
-        ...headers,
-      },
+      headers: finalHeaders,
     };
 
     const response = await fetch(url, config);
 
-    // 1. معالجة حالات الاستجابة الفارغة (مثل حذف مشروع بنجاح 204) لمنع تفجير الـ JSON Decoder
     if (response.status === 204 || response.headers.get("content-length") === "0") {
       return {} as T;
     }
 
-    // 2. التحقق مما إذا كانت الاستجابة القادمة من السيرفر هي فعلياً JSON أم نص عادي
     const contentType = response.headers.get("content-type");
     let errorData: any = {};
     
@@ -61,7 +70,6 @@ export const apiClient = {
       }
       return response.json() as Promise<T>;
     } else {
-      // إذا أرجع السيرفر نصاً عادياً أو خطأ HTML
       const textData = await response.text();
       if (!response.ok) {
         throw new Error(`Server status ${response.status}: ${textData.substring(0, 100)}`);
@@ -75,8 +83,8 @@ export const apiClient = {
   },
 
   post<T>(endpoint: string, body: any, options?: Omit<RequestOptions, "method" | "body">): Promise<T> {
-    // 🛠️ الإصلاح الحاسم: تحويل الـ body إلى نص JSON نقي إذا لم يكن محولاً بالفعل
-    const formattedBody = typeof body === "object" && !(body instanceof URLSearchParams) 
+    // 🚨 التعديل الحاسم الثاني: حماية الـ FormData من التحويل العشوائي إلى نص فارغ
+    const formattedBody = typeof body === "object" && !(body instanceof URLSearchParams) && !(body instanceof FormData)
       ? JSON.stringify(body) 
       : body;
 
@@ -84,8 +92,7 @@ export const apiClient = {
   },
 
   put<T>(endpoint: string, body: any, options?: Omit<RequestOptions, "method" | "body">): Promise<T> {
-    // 🛠️ الإصلاح الحاسم: تحويل الـ body إلى نص JSON نقي إذا لم يكن محولاً بالفعل
-    const formattedBody = typeof body === "object" && !(body instanceof URLSearchParams) 
+    const formattedBody = typeof body === "object" && !(body instanceof URLSearchParams) && !(body instanceof FormData)
       ? JSON.stringify(body) 
       : body;
 
