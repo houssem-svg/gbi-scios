@@ -5,17 +5,19 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_compliance_officer
 from app.models.user import User
 from app.schemas.compliance import (
     ComplianceFlagRead,
     ComplianceScanResult,
+    FlagStatusUpdate,
     MandatoryListUploadResult,
 )
 from app.services.compliance_service import (
     enrich_compliance_flag,
     list_project_compliance_flags,
     scan_project_compliance,
+    update_flag_status,
     upload_mandatory_list,
 )
 
@@ -52,3 +54,20 @@ def list_flags(
 ) -> list[ComplianceFlagRead]:
     flags = list_project_compliance_flags(db, project_id, current_user)
     return [enrich_compliance_flag(flag) for flag in flags]
+
+
+@router.patch("/flags/{flag_id}", response_model=ComplianceFlagRead)
+def change_flag_status(
+    flag_id: UUID,
+    payload: FlagStatusUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    officer: Annotated[User, Depends(require_compliance_officer)],
+) -> ComplianceFlagRead:
+    """Waive or resolve a compliance flag.
+
+    Only Admin/Consultant (compliance officer) roles may call this endpoint.
+    Waiving enforces the project waiver cap (default 10% of budget) and records
+    a full audit trail (who, when, why, optional waiver strategy link).
+    """
+    flag = update_flag_status(db, flag_id, payload, officer)
+    return enrich_compliance_flag(flag)

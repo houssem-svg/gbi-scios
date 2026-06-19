@@ -25,5 +25,9 @@ class WaiverStrategyRead(BaseModel):
     justification: str
     compensating_control: str
     approval_probability: str
+    approval_status: str = "PENDING"
+    waiver_amount: Optional[float] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)

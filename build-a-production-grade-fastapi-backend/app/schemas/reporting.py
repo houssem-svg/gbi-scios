@@ -21,6 +21,7 @@ class ExposureMetricsSchema(BaseModel):
     total_financial_exposure: float
     mandatory_list_penalties: float
     estimated_payroll_leakage: float
+    payroll_recognition_factor: float = 0.534
     exposure_percentage_vs_project_budget: float
 
 class RiskProfileSchema(BaseModel):
@@ -59,5 +60,5 @@ class ReportRead(BaseModel):
         return str(value) if value is not None else None
 
 class ReportListResponse(BaseModel):
-    data: list[ReportRead]
+    reports: list[ReportRead]
     total: int

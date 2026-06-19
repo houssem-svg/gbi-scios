@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 class ViolationType(str, enum.Enum):
     IMPORTED_MANDATORY_ITEM = "imported_mandatory_item"
+    LOCAL_CONTENT_QUOTA_UNMET = "local_content_quota_unmet"
+    NON_RHQ_SUPPLIER = "non_rhq_supplier"
+    PAYROLL_LEAKAGE = "payroll_leakage"
+    RISK_CAP_BREACH = "risk_cap_breach"
 
 
 class ComplianceFlagStatus(str, enum.Enum):
@@ -78,10 +82,33 @@ class ComplianceFlag(Base):
         default=ComplianceFlagStatus.OPEN,
         server_default=ComplianceFlagStatus.OPEN.value,
     )
+    # Waiver / resolution audit trail (Rule 10 — Waiver Logic).
+    # Populated when a compliance officer sets status to WAIVED or RESOLVED.
+    waived_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    waived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    waiver_reason: Mapped[str | None] = mapped_column(nullable=True)
+    waiver_strategy_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("waiver_strategies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         server_default=func.now(),
     )
 

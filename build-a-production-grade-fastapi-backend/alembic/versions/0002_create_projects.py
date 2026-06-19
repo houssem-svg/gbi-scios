@@ -5,6 +5,8 @@ Revises: 0001_create_users
 Create Date: 2026-06-15 00:00:00.000000
 
 """
+from __future__ import annotations
+
 from collections.abc import Sequence
 
 from alembic import op

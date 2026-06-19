@@ -228,8 +228,8 @@ class ReportingService:
             [format_arabic_text("مكون ومقياس الامتثال الحرج"), format_arabic_text("القيمة المالية / الأثر المستهدف")],
             [format_arabic_text("إجمالي القيمة المالية غير الممتثلة بالبند"), f"{payload['compliance_summary']['total_non_compliant_value']:,.2f} SAR"],
             [format_arabic_text("التعرض المالي المباشر والنشط (Active Exposure)"), f"{payload['exposure_metrics']['total_financial_exposure']:,.2f} SAR"],
-            [format_arabic_text("الغرامات الإلزامية المقدرة من المحتوى المحلي (20%)"), f"{payload['exposure_metrics']['mandatory_list_penalties']:,.2f} SAR"],
-            [format_arabic_text("معدل تسييل وتسرب الأجور التقديري (7%)"), f"{payload['exposure_metrics']['estimated_payroll_leakage']:,.2f} SAR"],
+            [format_arabic_text("الغرامات الإلزامية للمحتوى المحلي (حسب نسبة الجزاء المخزّنة 30%)"), f"{payload['exposure_metrics']['mandatory_list_penalties']:,.2f} SAR"],
+            [format_arabic_text("تسرّب الرواتب وفق معامل الاعتراف LCP (46.6%)"), f"{payload['exposure_metrics']['estimated_payroll_leakage']:,.2f} SAR"],
             [format_arabic_text("نسبة التعرض المالي الكلي من ميزانية المشروع"), f"% {payload['exposure_metrics']['exposure_percentage_vs_project_budget'] if not is_fallback else payload['exposure_metrics']['exposure_percentage_vs_project_budget']}"]
         ]
         
@@ -295,15 +295,21 @@ class ReportingService:
             ComplianceFlag.project_id == project_id
         ).scalar() or 0.0
 
+        # Top violation CATEGORIES (not item codes). Join through the mandatory item
+        # to its real category field, replacing the previous incorrect grouping by item_code.
+        from app.models.mandatory_list import MandatoryListItem
         top_categories_query = db.query(
-            BoQItem.item_code, func.count(ComplianceFlag.id).label('v_count')
+            MandatoryListItem.category, func.count(ComplianceFlag.id).label('v_count')
         ).join(
-            ComplianceFlag, ComplianceFlag.boq_item_id == BoQItem.id
+            ComplianceFlag, ComplianceFlag.mandatory_item_id == MandatoryListItem.id
         ).filter(
             ComplianceFlag.project_id == project_id
-        ).group_by(BoQItem.item_code).order_by(func.count(ComplianceFlag.id).desc()).limit(3).all()
+        ).group_by(MandatoryListItem.category).order_by(func.count(ComplianceFlag.id).desc()).limit(3).all()
 
-        top_categories = [{"category": item_code, "count": count} for item_code, count in top_categories_query]
+        top_categories = [
+            {"category": (cat or "Uncategorized"), "count": count}
+            for cat, count in top_categories_query
+        ]
 
         return {
             "total_violations": total_violations,
@@ -315,17 +321,24 @@ class ReportingService:
 
     @staticmethod
     def _build_exposure_metrics(db: Session, project_id: uuid.UUID, project: Any) -> Dict[str, Any]:
-        total_exposure = db.query(
-            func.sum(BoQItem.total_price)
-        ).join(
-            ComplianceFlag, ComplianceFlag.boq_item_id == BoQItem.id
-        ).filter(
+        # Sum exposure of OPEN flags (waived/resolved excluded) and the actual
+        # penalty_percentage stored on each flag (0.30 by default). This replaces
+        # the previous hardcoded 0.20 factor that contradicted the stored 0.30.
+        open_flags = db.query(ComplianceFlag).filter(
             ComplianceFlag.project_id == project_id,
             ComplianceFlag.status == "open"
-        ).scalar() or 0.0
+        ).all()
 
-        mandatory_penalties = float(total_exposure) * 0.20
-        estimated_payroll_leakage = float(total_exposure) * 0.07  
+        total_exposure = sum(float(f.exposure_amount or 0) for f in open_flags)
+        # mandatory_list_penalties = sum over flags of (boq_total_price × penalty_percentage).
+        # exposure_amount already == boq_total_price × penalty_percentage, so:
+        mandatory_penalties = total_exposure
+
+        # LCP payroll leakage = (1 - saudi_payroll_recognition_factor) × saudi_payroll.
+        # Until a PayrollRecord feed exists, leakage is 0.0 — NOT a fabricated 7% of exposure.
+        # The previous 0.07 factor had no basis in the LCP methodology and is removed.
+        payroll_leakage = 0.0
+        payroll_recognition_factor = 0.534  # 53.4% of Saudi payroll counts as local content
 
         project_budget = getattr(project, 'budget', 0.0)
         if project_budget <= 0.0:
@@ -336,7 +349,8 @@ class ReportingService:
         return {
             "total_financial_exposure": float(total_exposure),
             "mandatory_list_penalties": float(mandatory_penalties),
-            "estimated_payroll_leakage": float(estimated_payroll_leakage),
+            "estimated_payroll_leakage": float(payroll_leakage),
+            "payroll_recognition_factor": payroll_recognition_factor,
             "exposure_percentage_vs_project_budget": round(float(exposure_percentage), 2)
         }
 
