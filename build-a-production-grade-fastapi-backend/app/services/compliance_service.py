@@ -81,14 +81,22 @@ def scan_project_compliance(
         if match is None:
             continue
 
-        exposure_amount = boq_item.total_price * DEFAULT_PENALTY_PERCENTAGE
+        # Use the per-item penalty rate from the matched mandatory item
+        # (defaults to 0.25 but the government can set different rates per
+        # product). Falls back to DEFAULT_PENALTY_PERCENTAGE if the column
+        # is somehow missing/zero.
+        penalty_rate = match.mandatory_item.penalty_percentage
+        if penalty_rate is None or penalty_rate <= 0:
+            penalty_rate = DEFAULT_PENALTY_PERCENTAGE
+
+        exposure_amount = boq_item.total_price * penalty_rate
         flags.append(
             ComplianceFlag(
                 project_id=project_id,
                 boq_item_id=boq_item.id,
                 mandatory_item_id=match.mandatory_item.id,
                 violation_type=ViolationType.IMPORTED_MANDATORY_ITEM,
-                penalty_percentage=DEFAULT_PENALTY_PERCENTAGE,
+                penalty_percentage=penalty_rate,
                 exposure_amount=exposure_amount,
             )
         )

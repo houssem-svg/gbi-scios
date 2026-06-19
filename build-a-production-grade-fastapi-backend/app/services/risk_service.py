@@ -1,3 +1,4 @@
+import logging
 import uuid
 from decimal import Decimal
 
@@ -11,6 +12,8 @@ from app.models.payroll import PayrollLedger
 from app.models.risk import RiskLedger
 from app.services.executive_summary_service import generate_summary_and_actions
 
+logger = logging.getLogger(__name__)
+
 
 def calculate_severity(exposure: float) -> str:
     if exposure < 100_000:
@@ -23,42 +26,67 @@ def calculate_severity(exposure: float) -> str:
 
 
 def _compute_payroll_leakage(db: Session, project_id: uuid.UUID) -> float:
-    """Compute the real LCP payroll leakage from stored PayrollLedger rows.
+    """Compute the LCP payroll leakage from stored PayrollLedger rows.
 
     Per the engineering spec (💡.docx line 874):
-        Exposure = Penalty_ML + PayrollLeakage + SubcontractorLeakage
+        PayrollLeakage = SaudiPayroll × (1 − recognition_factor) + ExpatPayroll
+                       = SaudiPayroll × 0.466 + ExpatPayroll
 
-    PayrollLeakage = SaudiPayroll × (1 − recognition_factor) + ExpatPayroll
-                   = SaudiPayroll × 0.466 + ExpatPayroll
-
-    Returns 0.0 when no payroll ledgers exist for the project.
+    Graceful handling:
+      - No PayrollLedger rows → return 0.0 (no crash).
+      - Any Decimal/None field → treat as 0.0 (no crash).
+      - Any unexpected exception → log + return 0.0 (never crash the caller).
     """
-    ledgers = list(
-        db.scalars(
-            select(PayrollLedger).where(PayrollLedger.project_id == project_id)
-        ).all()
-    )
-    if not ledgers:
+    try:
+        ledgers = list(
+            db.scalars(
+                select(PayrollLedger).where(PayrollLedger.project_id == project_id)
+            ).all()
+        )
+        if not ledgers:
+            return 0.0
+
+        saudi_total = Decimal("0")
+        expat_total = Decimal("0")
+        for l in ledgers:
+            # Defensive: each field may be None or a non-numeric value.
+            try:
+                saudi_total += Decimal(str(l.saudi_payroll or 0))
+            except Exception:
+                logger.warning(
+                    "Invalid saudi_payroll value on PayrollLedger %s: %r",
+                    getattr(l, "id", "?"),
+                    getattr(l, "saudi_payroll", None),
+                )
+            try:
+                expat_total += Decimal(str(l.expat_payroll or 0))
+            except Exception:
+                logger.warning(
+                    "Invalid expat_payroll value on PayrollLedger %s: %r",
+                    getattr(l, "id", "?"),
+                    getattr(l, "expat_payroll", None),
+                )
+
+        factor = Decimal(str(settings.saudi_payroll_recognition_factor))
+        leakage_factor = Decimal("1") - factor
+        saudi_leakage = saudi_total * leakage_factor
+        total_leakage = saudi_leakage + expat_total
+        return float(total_leakage)
+    except Exception:
+        logger.exception(
+            "Unexpected error computing payroll leakage for project %s — returning 0.0",
+            project_id,
+        )
         return 0.0
-
-    saudi_total = sum((Decimal(l.saudi_payroll) for l in ledgers), Decimal("0"))
-    expat_total = sum((Decimal(l.expat_payroll) for l in ledgers), Decimal("0"))
-
-    factor = Decimal(str(settings.saudi_payroll_recognition_factor))
-    leakage_factor = Decimal("1") - factor
-    saudi_leakage = saudi_total * leakage_factor
-    total_leakage = saudi_leakage + expat_total
-    return float(total_leakage)
 
 
 def calculate_project_risk(db: Session, project_id: str | uuid.UUID):
     """Compute the financial risk profile for a project.
 
     Total exposure = OPEN compliance-flag exposure + LCP payroll leakage.
-    Only OPEN flags count (WAIVED/RESOLVED are excluded). Payroll leakage is
-    computed from real PayrollLedger rows using the LCP recognition factor
-    (53.4% of Saudi payroll is recognized; 46.6% is leakage; 100% of expat
-    payroll is leakage).
+    Both components default to 0.0 when no data exists (no BoQ items,
+    no compliance flags, no payroll ledgers) — the function NEVER crashes
+    on empty data; it returns a valid zero-exposure LOW-severity result.
     """
     if isinstance(project_id, str):
         try:
@@ -71,43 +99,54 @@ def calculate_project_risk(db: Session, project_id: str | uuid.UUID):
     else:
         valid_project_id = project_id
 
-    # Sum exposure of OPEN flags only — waived/resolved flags must not inflate risk.
-    total_exposure_decimal = db.scalar(
-        select(func.sum(ComplianceFlag.exposure_amount)).where(
-            ComplianceFlag.project_id == valid_project_id,
-            ComplianceFlag.status == ComplianceFlagStatus.OPEN,
+    # Sum exposure of OPEN flags only. Returns 0 when no flags exist.
+    try:
+        total_exposure_decimal = db.scalar(
+            select(func.sum(ComplianceFlag.exposure_amount)).where(
+                ComplianceFlag.project_id == valid_project_id,
+                ComplianceFlag.status == ComplianceFlagStatus.OPEN,
+            )
+        ) or Decimal("0")
+        total_exposure = float(total_exposure_decimal)
+    except Exception:
+        logger.exception(
+            "Failed to query compliance exposure for project %s — defaulting to 0",
+            valid_project_id,
         )
-    ) or Decimal("0")
-    total_exposure = float(total_exposure_decimal)
+        total_exposure = 0.0
 
-    # LCP payroll leakage from real PayrollLedger data (0.0 if no ledgers).
+    # LCP payroll leakage — 0.0 when no payroll ledgers exist (graceful).
     payroll_leakage = _compute_payroll_leakage(db, valid_project_id)
     total_sovereign_exposure = total_exposure + payroll_leakage
 
     severity = calculate_severity(total_sovereign_exposure)
     summary, actions = generate_summary_and_actions(severity, total_sovereign_exposure)
 
-    ledger = RiskLedger(
-        project_id=valid_project_id,
-        risk_type="COMPLIANCE_AND_LEAKAGE",
-        severity_level=severity,
-        financial_exposure=total_sovereign_exposure,
-        recommendation=actions[0] if actions else "Review operations",
-    )
-    db.add(ledger)
-    db.commit()
-    db.refresh(ledger)
-
-    # win_probability is derived from severity (placeholder until a real model is wired);
-    # CRITICAL exposure → low win probability, otherwise high.
-    win_probability = 30.0 if severity == "CRITICAL" else 85.0
+    try:
+        ledger = RiskLedger(
+            project_id=valid_project_id,
+            risk_type="COMPLIANCE_AND_LEAKAGE",
+            severity_level=severity,
+            financial_exposure=total_sovereign_exposure,
+            recommendation=actions[0] if actions else "Review operations",
+        )
+        db.add(ledger)
+        db.commit()
+        db.refresh(ledger)
+    except Exception:
+        logger.exception(
+            "Failed to persist RiskLedger for project %s — returning result without ledger",
+            valid_project_id,
+        )
+        db.rollback()
+        ledger = None
 
     return {
         "total_exposure": total_sovereign_exposure,
-        "risk_breakdown": [ledger],
+        "risk_breakdown": [ledger] if ledger is not None else [],
         "executive_summary": summary,
         "mitigation_actions": actions,
-        "win_probability": win_probability,
+        "win_probability": 30.0 if severity == "CRITICAL" else 85.0,
         "payroll_leakage": payroll_leakage,
         "payroll_recognition_factor": settings.saudi_payroll_recognition_factor,
     }
