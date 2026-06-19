@@ -1,32 +1,44 @@
 // types/project.ts
 
+/**
+ * Mirrors backend `ProjectRead` (app/schemas/project.py):
+ * { id, project_name, client_name, sector, status, created_at, owner_id }
+ *
+ * The frontend keeps `name`/`client` aliases (mapped in projectService) so
+ * existing UI components keep working without a wide refactor.
+ *
+ * risk_level / compliance_score are intentionally removed — they do NOT exist
+ * on the backend ProjectRead (audit finding FE-9).
+ */
+
+export type ProjectStatus =
+  | "Planning"
+  | "Active"
+  | "On Hold"
+  | "Completed"
+  | "Cancelled";
+
 export interface Project {
   id: string;
-  // الحقول الأصلية (للواجهة الأمامية)
+  // Frontend-friendly aliases (mapped from project_name / client_name).
   name: string;
   client: string;
-  compliance_score: number;
-  risk_level: 'Low' | 'Moderate' | 'High' | 'Critical';
-  status: 'Active' | 'Review' | 'Compliant' | 'Planning';
+  sector: string;
+  status: ProjectStatus;
   created_at: string;
-
-  // الحقول الإضافية (لتتوافق مع الباكيند الجديد FastAPI دون أخطاء)
-  project_name?: string;
-  client_name?: string;
-  sector?: string;
+  owner_id: string;
 }
 
 export interface ProjectCreateInput {
-  // ندعم الصيغتين معاً لضمان عدم حدوث خطأ 2345 في أي صفحة
-  name?: string;
-  client?: string;
-  risk_level?: 'Low' | 'Moderate' | 'High' | 'Critical';
-  status?: 'Active' | 'Review' | 'Compliant' | 'Planning';
+  project_name: string;
+  client_name: string;
+  sector?: string;
+  status?: ProjectStatus;
+}
 
-  // حقول الباكيند المطلوبة
+export interface ProjectUpdateInput {
   project_name?: string;
   client_name?: string;
   sector?: string;
+  status?: ProjectStatus;
 }
-
-export interface ProjectUpdateInput extends Partial<ProjectCreateInput> {}

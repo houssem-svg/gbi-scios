@@ -6,7 +6,7 @@ import ProjectsTable from "@/components/projects/ProjectsTable";
 import ProjectModal from "@/components/projects/ProjectModal";
 import DeleteConfirmModal from "@/components/projects/DeleteConfirmModal";
 import { projectService } from "@/lib/projectService";
-import { Project, ProjectCreateInput } from "@/types/project";
+import { Project, ProjectCreateInput, ProjectUpdateInput } from "@/types/project";
 
 export default function ProjectsWorkspacePage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -26,8 +26,9 @@ export default function ProjectsWorkspacePage() {
       const data = await projectService.getAllProjects();
       setProjects(data);
       setFilteredProjects(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to synchronise telemetry bounds.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to load projects.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -39,36 +40,27 @@ export default function ProjectsWorkspacePage() {
 
   const handleSearch = (term: string) => {
     const searchTerm = term.toLowerCase();
-    const output = projects.filter((p) =>
-      (p.name || "").toLowerCase().includes(searchTerm) ||
-      (p.client || "").toLowerCase().includes(searchTerm)
+    const output = projects.filter(
+      (p) =>
+        (p.name || "").toLowerCase().includes(searchTerm) ||
+        (p.client || "").toLowerCase().includes(searchTerm) ||
+        (p.sector || "").toLowerCase().includes(searchTerm),
     );
     setFilteredProjects(output);
   };
 
-  const handleFormSubmit = async (formData: any) => {
+  const handleFormSubmit = async (formData: ProjectCreateInput | ProjectUpdateInput) => {
     try {
-      // 🛠️ التعديل الجذري الحاسم: بناء الكائن هنا وإرساله مباشرة بالشكل الذي يطلبه الباكيند 100%
-      const finalPayload: any = {
-        project_name: String(formData.name || "Sovereign Project"),
-        client_name: String(formData.client || "Sovereign Client"),
-        sector: "Security Sector", // مستوفي شرط الطول [2, 120] أحرف
-        status: "Planning" // متوافق تماماً مع الـ Enum المتوقع في الباكيند
-      };
-
-      console.log("🎯 CRITICAL PAYLOAD FROM PAGE.TSX:", JSON.stringify(finalPayload));
-
       if (selectedProject) {
-        await projectService.updateProject(selectedProject.id, finalPayload);
+        await projectService.updateProject(selectedProject.id, formData as ProjectUpdateInput);
       } else {
-        // نمرر الكائن الجديد الجاهز للخدمة مباشرة
-        await projectService.createProject(finalPayload);
+        await projectService.createProject(formData as ProjectCreateInput);
       }
-      
       await fetchWorkspace();
       setIsProjectModalOpen(false);
-    } catch (err: any) {
-      alert(err.message || "Mutation rejected by transaction supervisor.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Operation rejected by the server.";
+      alert(msg);
     }
   };
 
@@ -78,8 +70,9 @@ export default function ProjectsWorkspacePage() {
       await projectService.deleteProject(selectedProject.id);
       await fetchWorkspace();
       setIsDeleteModalOpen(false);
-    } catch (err: any) {
-      alert(err.message || "Cascading delete constraints propagation failed.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to delete project.";
+      alert(msg);
     }
   };
 

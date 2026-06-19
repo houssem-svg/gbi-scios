@@ -3,12 +3,12 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { authService } from "@/lib/authService";
-import { UserProfile } from "@/types/auth";
+import { LoginFormData, UserProfile } from "@/types/auth";
 
 interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
-  login: (data: any) => Promise<void>;
+  login: (data: LoginFormData) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -22,24 +22,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    async function initializeAuth() {
-      if (authService.isAuthenticated()) {
-        // تم تجاوز getCurrentUser مؤقتاً لعدم وجود مسار /me في الباكيند
-        setUser({ id: "executive-user", email: "admin@gbi-scios.com", role: "admin" });
-      } else if (pathname.startsWith("/dashboard")) {
+    function initializeAuth() {
+      const hasToken = authService.isAuthenticated();
+      const cachedUser = authService.getCachedUser();
+
+      if (hasToken && cachedUser) {
+        setUser(cachedUser);
+      } else if (hasToken && !cachedUser) {
+        // Token present but no user cached — clear token to force a re-login.
+        authService.logout();
+        setUser(null);
+      } else if (!hasToken && pathname?.startsWith("/dashboard")) {
         router.push("/login");
       }
       setLoading(false);
     }
     initializeAuth();
-  }, [pathname, router]);
+    // Run only once on mount — the fake-user re-injection on every pathname
+    // change (audit finding FE-4/MEDIUM) has been removed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const login = async (data: any) => {
+  const login = async (data: LoginFormData) => {
     setLoading(true);
     try {
-      await authService.login(data);
-      // حقن كائن مستخدم محلي لتجاوز قيد الـ Null ومتابعة التحويل
-      setUser({ id: "executive-user", email: data.email, role: "admin" });
+      const loggedInUser = await authService.login(data);
+      setUser(loggedInUser);
       router.push("/dashboard");
     } catch (error) {
       setLoading(false);

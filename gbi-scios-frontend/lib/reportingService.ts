@@ -1,14 +1,16 @@
 // src/lib/reportingService.ts
 
-import { apiClient } from "./api";
+import { apiClient, API_BASE_URL } from "./api";
 import { GenerateReportInput, Report, ReportListResponse } from "@/types/report";
-
-const BASE_URL = "http://127.0.0.1:8000/api/v1";
 
 export const reportingService = {
   async getReportsByProject(projectId: string): Promise<Report[]> {
-    const response = await apiClient.get<ReportListResponse | Report[]>(`/reporting/project/${projectId}`);
-    return Array.isArray(response) ? response : response.data;
+    const response = await apiClient.get<ReportListResponse | Report[]>(
+      `/reporting/project/${projectId}`,
+    );
+    if (Array.isArray(response)) return response;
+    // Backend returns { reports: Report[], total: number }
+    return (response as ReportListResponse)?.reports ?? (response as { data?: Report[] })?.data ?? [];
   },
 
   async generateReport(data: GenerateReportInput): Promise<Report> {
@@ -16,16 +18,32 @@ export const reportingService = {
   },
 
   async downloadReport(reportId: number, filename: string): Promise<void> {
-    const token = localStorage.getItem("access_token");
-    const headers: HeadersInit = {};
+    const token =
+      typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+    const headers: Record<string, string> = {};
     if (token) {
       headers["Authorization"] = `Bearer ${token.trim()}`;
     }
 
-    const response = await fetch(`${BASE_URL}/reporting/download/${reportId}`, {
+    const response = await fetch(`${API_BASE_URL}/reporting/download/${reportId}`, {
       method: "GET",
       headers,
     });
+
+    // FE-6: central 401 handling — re-use the same redirect behavior even
+    // though we bypass apiClient for the blob download.
+    if (response.status === 401) {
+      try {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("user");
+        document.cookie =
+          "access_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+      } catch {
+        // ignore
+      }
+      window.location.href = "/login";
+      throw new Error("Session expired. Please sign in again.");
+    }
 
     if (!response.ok) {
       throw new Error(`Failed to download report: ${response.statusText}`);
@@ -35,7 +53,7 @@ export const reportingService = {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename.endsWith('.pdf') ? filename : `${filename}.pdf`;
+    a.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);

@@ -3,7 +3,9 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 
-const inter = Inter({ subsets: ["latin"] });
+// FE-17: expose Inter via the --font-inter CSS variable so globals.css's
+// `--font-sans: var(--font-inter)` resolves to Inter.
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: "GBI-SCIOS Console",
@@ -17,13 +19,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body 
-        className={`${inter.className} bg-slate-950 text-slate-100 min-h-screen`}
+      <body
+        className={`${inter.variable} bg-slate-950 text-slate-100 min-h-screen antialiased`}
         suppressHydrationWarning
       >
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

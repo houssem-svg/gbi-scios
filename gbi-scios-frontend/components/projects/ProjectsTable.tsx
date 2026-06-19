@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Edit2, Trash2, Folder, ShieldX, UploadCloud, Loader2 } from "lucide-react";
-import { Project } from "@/types/project";
+import { Project, ProjectStatus } from "@/types/project";
 
 interface ProjectsTableProps {
   projects: Project[];
@@ -11,6 +11,14 @@ interface ProjectsTableProps {
   onDeleteClick: (project: Project) => void;
 }
 
+const STATUS_COLORS: Record<ProjectStatus, string> = {
+  Planning: "bg-slate-700 text-slate-200",
+  Active: "bg-emerald-900/50 text-emerald-300",
+  "On Hold": "bg-amber-900/50 text-amber-300",
+  Completed: "bg-blue-900/50 text-blue-300",
+  Cancelled: "bg-red-900/50 text-red-300",
+};
+
 export default function ProjectsTable({ projects, loading, onEditClick, onDeleteClick }: ProjectsTableProps) {
   const [uploadingProjectId, setUploadingProjectId] = useState<string | null>(null);
 
@@ -18,39 +26,31 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // التحقق الصارم من امتداد الملف
-    if (!file.name.endsWith('.csv')) {
+    if (!file.name.endsWith(".csv")) {
       alert("Invalid file format. Please upload a standard CSV dataset.");
       return;
     }
 
     setUploadingProjectId(projectId);
     try {
-      // 🛠️ بناء الـ FormData بمطابقة مطلقة مع دالة التوثيق في الباكيند (حقلين فقط)
       const formData = new FormData();
-      formData.append("project_id", String(projectId).trim()); // تأمين وتمرير صيغة الـ UUID للباكيند كـ String نقي
-      formData.append("file", file, file.name);               // تمرير الملف الثنائي مع اسمه الصريح لـ FastAPI
+      formData.append("project_id", String(projectId).trim());
+      formData.append("file", file, file.name);
 
-      // استدعاء الـ apiClient المشترك
       const { apiClient } = await import("@/lib/api");
-      
-      // 🚀 إرسال الطلب للمسار المعتمد بالجمع "/uploads"
       await apiClient.request("/uploads", {
         method: "POST",
         body: formData,
-        headers: {
-          // نرسل الترويسة فارغة تماماً ليقوم المتصفح ببناء الـ multipart/form-data مع الـ boundary الصحيح آلياً
-          "Content-Type": undefined as any 
-        }
       });
 
-      alert("Telemetry CSV dataset injected, compiled, and verified successfully! ✅");
-    } catch (err: any) {
-      alert(err.message || "Telemetry stream ingestion failed.");
+      alert("CSV uploaded successfully.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed.";
+      alert(msg);
     } finally {
       setUploadingProjectId(null);
       if (e.target) {
-        (e.target as any).value = ""; // تصفير حقل الإدخال لتهيئة الرفع القادم بأمان
+        (e.target as HTMLInputElement).value = "";
       }
     }
   };
@@ -78,8 +78,10 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
         <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 mb-4 text-slate-500">
           <ShieldX className="w-6 h-6" />
         </div>
-        <h3 className="text-sm font-medium text-slate-300">No telemetry bounds allocated</h3>
-        <p className="text-xs text-slate-500 max-w-xs mt-1">Initialize a system node execution to capture telemetry.</p>
+        <h3 className="text-sm font-medium text-slate-300">No projects yet</h3>
+        <p className="text-xs text-slate-500 max-w-xs mt-1">
+          Create your first project to start tracking compliance.
+        </p>
       </div>
     );
   }
@@ -90,12 +92,11 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
         <table className="w-full text-left text-sm whitespace-nowrap">
           <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800">
             <tr>
-              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Project Metadata</th>
-              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Sovereign Entity</th>
-              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Compliance Quotient</th>
-              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Risk Bound</th>
+              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Project</th>
+              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Client</th>
+              <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Sector</th>
               <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs">Status</th>
-              <th className="px-6 py-4 font-medium text-right uppercase tracking-wider text-xs">Controls</th>
+              <th className="px-6 py-4 font-medium text-right uppercase tracking-wider text-xs">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/50">
@@ -111,59 +112,47 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
                   </div>
                 </td>
                 <td className="px-6 py-4 text-slate-300">{project.client}</td>
-                <td className="px-6 py-4 font-mono font-semibold text-slate-100">
-                  {typeof project.compliance_score === "number" ? `${project.compliance_score.toFixed(2)}%` : project.compliance_score}
-                </td>
+                <td className="px-6 py-4 text-slate-300">{project.sector || "—"}</td>
                 <td className="px-6 py-4">
-                  <span className={`px-2.5 py-0.5 rounded-md text-xs font-medium border ${
-                    project.risk_level === 'Critical' ? 'bg-red-950/50 text-red-400 border-red-900/50' :
-                    project.risk_level === 'High' ? 'bg-orange-950/50 text-orange-400 border-orange-900/50' :
-                    project.risk_level === 'Moderate' ? 'bg-yellow-950/50 text-yellow-400 border-yellow-900/50' :
-                    'bg-emerald-950/50 text-emerald-400 border-emerald-900/50'
-                  }`}>
-                    {project.risk_level}
+                  <span
+                    className={`px-2.5 py-0.5 rounded-md text-xs font-medium ${STATUS_COLORS[project.status]}`}
+                  >
+                    {project.status}
                   </span>
                 </td>
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full ${
-                      project.status === 'Active' ? 'bg-blue-500' :
-                      project.status === 'Review' ? 'bg-orange-500' : 'bg-emerald-500'
-                    }`} />
-                    <span className="text-slate-300 text-xs">{project.status}</span>
-                  </div>
-                </td>
                 <td className="px-6 py-4 text-right">
-                  <input 
-                    type="file" 
+                  <input
+                    type="file"
                     id={`csv-file-${project.id}`}
-                    className="hidden" 
+                    className="hidden"
                     accept=".csv"
                     onChange={(e) => handleFileChange(e, project.id)}
                   />
-                  
+
                   <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     {uploadingProjectId === project.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 mr-1" />
                     ) : (
-                      <label 
+                      <label
                         htmlFor={`csv-file-${project.id}`}
                         className="p-1 text-slate-400 hover:text-emerald-400 rounded hover:bg-slate-800 transition-colors cursor-pointer block"
-                        title="Upload CSV Telemetry Dataset"
+                        title="Upload CSV"
                       >
                         <UploadCloud className="w-3.5 h-3.5" />
                       </label>
                     )}
-                    
-                    <button 
+
+                    <button
                       onClick={() => onEditClick(project)}
                       className="p-1 text-slate-400 hover:text-blue-400 rounded hover:bg-slate-800 transition-colors"
+                      title="Edit"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
-                    <button 
+                    <button
                       onClick={() => onDeleteClick(project)}
                       className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-slate-800 transition-colors"
+                      title="Delete"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

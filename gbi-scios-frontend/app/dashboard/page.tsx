@@ -2,14 +2,29 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { ShieldCheck, Activity, AlertTriangle, Briefcase, Bell, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  ShieldCheck,
+  Activity,
+  Briefcase,
+  AlertTriangle,
+  RefreshCw,
+  ListChecks,
+} from "lucide-react";
 
-// تم استخدام المسارات المباشرة والاسم الفعلي MetricsCard.tsx
-import { dashboardService } from "../../lib/dashboardService";
-import { DashboardSummary } from "../../types/dashboard";
-import MetricCard from "../../components/dashboard/MetricCard";
-import ExposureChart from "../../components/dashboard/ExposureChart";
+import { dashboardService } from "@/lib/dashboardService";
+import { DashboardSummary } from "@/types/dashboard";
+import MetricCard from "@/components/dashboard/MetricCard";
+import ExposureChart from "@/components/dashboard/ExposureChart";
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+
+const formatPercent = (value: number) => `${Math.round(value ?? 0)}%`;
 
 export default function ExecutiveDashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -18,7 +33,7 @@ export default function ExecutiveDashboardPage() {
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchDashboardData = async (silent = false) => {
+  const fetchDashboardData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setIsRefreshing(true);
     setError(null);
@@ -26,26 +41,28 @@ export default function ExecutiveDashboardPage() {
       const data = await dashboardService.getSummary();
       setSummary(data);
       setLastRefreshed(new Date());
-    } catch (err: any) {
-      setError(`Failed to fetch live telemetry: ${err.message || "Unknown error"}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(`Failed to fetch dashboard summary: ${msg}`);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchDashboardData();
+    // FE-2: keep the 60s auto-refresh but gate on document visibility so a
+    // hidden tab does not keep hammering the backend.
     const interval = setInterval(() => {
-      fetchDashboardData(true);
-    }, 60000); // Auto-refresh every 60 seconds
+      if (document.visibilityState === "visible") {
+        fetchDashboardData(true);
+      }
+    }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchDashboardData]);
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
-  };
-
+  // Loading skeleton.
   if (loading && !summary) {
     return (
       <div className="max-w-7xl mx-auto space-y-6">
@@ -63,21 +80,27 @@ export default function ExecutiveDashboardPage() {
     );
   }
 
+  const breakdown = summary?.compliance_breakdown;
+  const topRisks = summary?.top_risk_projects ?? [];
+
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-500 space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-100 tracking-tight">Executive Dashboard</h1>
-          <p className="text-sm text-slate-400 mt-1">Live enterprise compliance and risk telemetry.</p>
+          <p className="text-sm text-slate-400 mt-1">
+            Live enterprise compliance and risk telemetry.
+          </p>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-500">
           <span>Last sync: {lastRefreshed.toLocaleTimeString()}</span>
-          <button 
+          <button
             onClick={() => fetchDashboardData(false)}
             disabled={isRefreshing}
             className="p-2 bg-slate-900 border border-slate-800 rounded-lg hover:bg-slate-800 hover:text-white transition-colors disabled:opacity-50"
+            title="Refresh"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>
@@ -90,74 +113,158 @@ export default function ExecutiveDashboardPage() {
 
       {summary && (
         <>
+          {/* Metric cards from real backend fields */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <MetricCard 
-              title="Total Exposure" 
-              value={formatCurrency(summary.total_exposure)} 
-              change={summary.exposure_change} 
-              icon={<Activity className="w-5 h-5" />} 
-              isNegativeGood={true}
+            <MetricCard
+              title="Total Projects"
+              value={summary.total_projects}
+              icon={<Briefcase className="w-5 h-5" />}
             />
-            <MetricCard 
-              title="Compliance Score" 
-              value={summary.compliance_score} 
-              change={summary.compliance_change} 
-              icon={<ShieldCheck className="w-5 h-5" />} 
-              suffix="%"
+            <MetricCard
+              title="Total Budget Managed"
+              value={formatCurrency(summary.total_budget_managed)}
+              icon={<ShieldCheck className="w-5 h-5" />}
             />
-            <MetricCard 
-              title="Active Projects" 
-              value={summary.active_projects} 
-              icon={<Briefcase className="w-5 h-5" />} 
+            <MetricCard
+              title="Total Financial Exposure"
+              value={formatCurrency(summary.total_financial_exposure)}
+              icon={<AlertTriangle className="w-5 h-5" />}
+              isNegativeGood
             />
-            <MetricCard 
-              title="Critical Risks" 
-              value={summary.critical_risks} 
-              icon={<AlertTriangle className="w-5 h-5" />} 
-              isNegativeGood={true}
+            <MetricCard
+              title="Overall Compliance Score"
+              value={formatPercent(summary.overall_compliance_score)}
+              icon={<Activity className="w-5 h-5" />}
             />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Exposure chart sourced from top_risk_projects */}
             <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-sm font-semibold text-slate-200 mb-1">Exposure Trends</h3>
-              <p className="text-xs text-slate-500 mb-4">Financial risk exposure over the last 30 days.</p>
-              {summary.exposure_trends && summary.exposure_trends.length > 0 ? (
-                <ExposureChart data={summary.exposure_trends} />
-              ) : (
-                <div className="h-[300px] flex items-center justify-center text-slate-500 text-sm font-mono border border-dashed border-slate-800 rounded-lg mt-4">
-                  No trend data available
-                </div>
-              )}
+              <h3 className="text-sm font-semibold text-slate-200 mb-1">Top Risk Projects — Exposure</h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Financial exposure per top-risk project (red &gt; 1M, orange &gt; 100K).
+              </p>
+              <ExposureChart data={topRisks} />
             </div>
 
+            {/* Compliance breakdown */}
             <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-col">
               <div className="flex items-center gap-2 mb-4">
-                <Bell className="w-4 h-4 text-orange-400" />
-                <h3 className="text-sm font-semibold text-slate-200">Executive Alerts</h3>
+                <ListChecks className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm font-semibold text-slate-200">Compliance Breakdown</h3>
               </div>
-              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
-                {summary.alerts && summary.alerts.length > 0 ? (
-                  summary.alerts.map((alert) => (
-                    <div key={alert.id} className="p-3 bg-slate-950/50 border border-slate-800/80 rounded-lg border-l-2 border-l-red-500">
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-red-400">{alert.severity}</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{new Date(alert.timestamp).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-xs text-slate-300 leading-relaxed">{alert.message}</p>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-slate-500 opacity-50">
-                    <ShieldCheck className="w-8 h-8 mb-2" />
-                    <span className="text-xs">No active alerts</span>
+              <div className="flex-1 space-y-3">
+                <BreakdownRow label="Open flags" value={breakdown?.open_flags ?? 0} tone="red" />
+                <BreakdownRow
+                  label="Resolved flags"
+                  value={breakdown?.resolved_flags ?? 0}
+                  tone="emerald"
+                />
+                <BreakdownRow
+                  label="Waived flags"
+                  value={breakdown?.waived_flags ?? 0}
+                  tone="amber"
+                />
+                <div className="pt-3 mt-3 border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-wider text-slate-500 font-medium">
+                      Total flags
+                    </span>
+                    <span className="text-lg font-mono font-bold text-slate-100">
+                      {breakdown?.total_flags ?? 0}
+                    </span>
                   </div>
-                )}
+                </div>
               </div>
             </div>
+          </div>
+
+          {/* Top risk projects table */}
+          <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-800">
+              <h3 className="text-sm font-semibold text-slate-200">Top Risk Projects</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Projects with the highest exposure and flag counts.
+              </p>
+            </div>
+            {topRisks.length === 0 ? (
+              <div className="p-10 text-center text-sm text-slate-500">
+                No risk-bearing projects detected.
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 sticky top-0">
+                    <tr>
+                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
+                        Project
+                      </th>
+                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
+                        Exposure
+                      </th>
+                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
+                        Flags
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {topRisks.map((p) => (
+                      <tr key={p.project_id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="px-6 py-3">
+                          <div className="font-medium text-slate-200">{p.project_name || "—"}</div>
+                          <div className="text-xs text-slate-500 font-mono mt-0.5">
+                            {p.project_id}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 font-mono font-semibold text-slate-100">
+                          {formatCurrency(p.project_exposure)}
+                        </td>
+                        <td className="px-6 py-3">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-md text-xs font-medium border ${
+                              p.flag_count > 5
+                                ? "bg-red-950/50 text-red-400 border-red-900/50"
+                                : p.flag_count > 0
+                                  ? "bg-orange-950/50 text-orange-400 border-orange-900/50"
+                                  : "bg-emerald-950/50 text-emerald-400 border-emerald-900/50"
+                            }`}
+                          >
+                            {p.flag_count}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </>
       )}
     </div>
   );
 }
+
+interface BreakdownRowProps {
+  label: string;
+  value: number;
+  tone: "red" | "emerald" | "amber";
+}
+
+function BreakdownRow({ label, value, tone }: BreakdownRowProps) {
+  const toneClasses: Record<BreakdownRowProps["tone"], string> = {
+    red: "text-red-400 bg-red-950/30 border-red-900/40",
+    emerald: "text-emerald-400 bg-emerald-950/30 border-emerald-900/40",
+    amber: "text-amber-400 bg-amber-950/30 border-amber-900/40",
+  };
+  return (
+    <div className="flex items-center justify-between p-3 rounded-lg border border-slate-800/80 bg-slate-950/40">
+      <span className="text-xs text-slate-300">{label}</span>
+      <span className={`text-sm font-mono font-bold px-2 py-0.5 rounded border ${toneClasses[tone]}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
