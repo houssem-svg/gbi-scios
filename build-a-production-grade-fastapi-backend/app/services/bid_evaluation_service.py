@@ -38,9 +38,17 @@ logger = logging.getLogger(__name__)
 _HUNDRED = Decimal("100")
 _ZERO = Decimal("0")
 
-# Static formula weight tables (Rules 1, 2, 3).
+# Static formula weight tables (Rules 1, 2).
+# Per the engineering spec (💡.docx Microservice 1, line 799-805 + code 826-830):
+#   60/40 model: FinalScore = (P_min/P_eval × 60) + (LC × 0.40)  → price_weight=60, lc_weight=40
+#   70/30 model: FinalScore = (P_min/P_eval × 30) + (LC × 0.70)  → price_weight=30, lc_weight=70
+#   50/50 model: equal weights.
+# Verified against JSON payload example (line 1228-1248):
+#   Client  bid=250M, lc=15, p_min=235M → financial=56.40 (=0.94×60), lc_score=6.00 (=15×0.40), final=62.40
+#   Compet. bid=235M, lc=45, tadawul+5  → financial=60.00 (=1×60),   lc_score=18.00(=45×0.40), final=83.00
+# Tuple order is (lc_weight, price_weight).
 _FORMULA_WEIGHTS: dict[EvaluationFormula, tuple[Decimal, Decimal]] = {
-    EvaluationFormula.SIXTY_FORTY: (Decimal("60"), Decimal("40")),
+    EvaluationFormula.SIXTY_FORTY: (Decimal("40"), Decimal("60")),
     EvaluationFormula.SEVENTY_THIRTY: (Decimal("70"), Decimal("30")),
     EvaluationFormula.FIFTY_FIFTY: (Decimal("50"), Decimal("50")),
 }
@@ -50,7 +58,7 @@ def _resolve_weights(criteria: EvaluationCriteria) -> tuple[Decimal, Decimal]:
     """Return ``(lc_weight, price_weight)`` for the active formula."""
     if criteria.formula == EvaluationFormula.CUSTOM:
         return criteria.lc_weight, criteria.price_weight
-    return _FORMULA_WEIGHTS.get(criteria.formula, (Decimal("60"), Decimal("40")))
+    return _FORMULA_WEIGHTS.get(criteria.formula, (Decimal("40"), Decimal("60")))
 
 
 def get_or_create_criteria(
@@ -257,17 +265,20 @@ def run_evaluation(
         else:
             bid.sme_preference_applied = False
 
-        # --- Tadawul listed bonus on LC score (Rule 6) -------------------
-        if supplier is not None and supplier.is_tadawul_listed:
-            lc_score = min(_HUNDRED, lc_score + tadawul_bonus)
-            bid.tadawul_bonus_applied = True
-        else:
-            bid.tadawul_bonus_applied = False
+        # --- Tadawul listed bonus (Rule 4) --------------------------------
+        # Per the engineering spec (💡.docx JSON example, line 1238-1248):
+        #   competitor: financial_score=60.00, lc_score=18.00, tadawul_bonus=5.00, final=83.00
+        #   83.00 = 60.00 + 18.00 + 5.00
+        # The Tadawul bonus is added DIRECTLY to the final score AFTER the weighted
+        # sum, NOT to the LC score before weighting.
+        tadawul_bonus_pts = tadawul_bonus if (supplier is not None and supplier.is_tadawul_listed) else _ZERO
+        bid.tadawul_bonus_applied = bool(tadawul_bonus_pts > 0)
 
         bid.effective_price = effective_price
 
         breakdown["effective_price"] = str(effective_price)
-        breakdown["lc_score_with_bonus"] = str(lc_score)
+        breakdown["lc_score_raw"] = str(lc_score)
+        breakdown["tadawul_bonus_pts"] = str(tadawul_bonus_pts)
         breakdown["sme_preference_applied"] = bid.sme_preference_applied
         breakdown["tadawul_bonus_applied"] = bid.tadawul_bonus_applied
 
@@ -276,6 +287,7 @@ def run_evaluation(
                 "bid": bid,
                 "effective_price": effective_price,
                 "lc_score": lc_score,
+                "tadawul_bonus_pts": tadawul_bonus_pts,
                 "final_score": None,
                 "rank": 0,
                 "disqualified": False,
@@ -285,18 +297,26 @@ def run_evaluation(
         )
 
     # --- Weighted score (Rules 1, 2, 3, 4) ---------------------------------
+    # Per the engineering spec (💡.docx line 799-805):
+    #   FinalScore = (P_min/P_eval × price_weight) + (LC × lc_weight/100)
+    # Then Tadawul bonus is added to the final score (not weighted).
     eligible = [c for c in computed if not c["disqualified"]]
     if eligible:
         lowest_price = min(c["effective_price"] for c in eligible)
         for c in eligible:
             price_score = (lowest_price / c["effective_price"]) * _HUNDRED
-            final_score = (lc_weight / _HUNDRED) * c["lc_score"] + (
+            weighted_score = (lc_weight / _HUNDRED) * c["lc_score"] + (
                 price_weight / _HUNDRED
             ) * price_score
+            # Tadawul bonus added AFTER weighting (per spec JSON example).
+            final_score = weighted_score + c["tadawul_bonus_pts"]
             c["price_score"] = price_score
+            c["weighted_score"] = weighted_score
             c["final_score"] = final_score
             c["bid"].final_score = final_score
             c["breakdown"]["price_score"] = str(price_score)
+            c["breakdown"]["weighted_score"] = str(weighted_score)
+            c["breakdown"]["tadawul_bonus_added"] = str(c["tadawul_bonus_pts"])
             c["breakdown"]["final_score"] = str(final_score)
 
         eligible.sort(key=lambda c: c["final_score"], reverse=True)
@@ -326,10 +346,18 @@ def run_evaluation(
         new_results.append(er)
 
     # --- Risk cap (Rule 8) -------------------------------------------------
-    risk_cap_breached, total_exposure, _cap_amount = check_risk_cap(
-        db, project_id, criteria
+    # Per the engineering spec (💡.docx line 870):
+    #   FinalPenalty = min(TotalCalculatedPenalties, P_eval × 0.20)
+    # The cap base is the WINNING BID VALUE (lowest effective_price), not the
+    # project budget. The capped_penalty is the effective penalty after clamping.
+    winning_bid_value = _ZERO
+    if eligible:
+        winner = min(eligible, key=lambda c: c["effective_price"])
+        winning_bid_value = winner["effective_price"]
+
+    risk_cap_breached, total_exposure, cap_amount, capped_penalty = check_risk_cap(
+        db, project_id, criteria, winning_bid_value=winning_bid_value
     )
-    project_budget = _project_budget(db, project_id)
 
     db.commit()
     for er in new_results:
@@ -347,5 +375,5 @@ def run_evaluation(
         risk_cap_breached=risk_cap_breached,
         risk_cap_pct=criteria.risk_cap_pct,
         total_exposure=total_exposure,
-        project_budget=project_budget,
+        project_budget=winning_bid_value,
     )

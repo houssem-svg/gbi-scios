@@ -67,8 +67,8 @@ class ComplianceFlag(Base):
     penalty_percentage: Mapped[Decimal] = mapped_column(
         Numeric(5, 4),
         nullable=False,
-        default=Decimal("0.30"),
-        server_default="0.30",
+        default=Decimal("0.25"),
+        server_default="0.25",
     )
     exposure_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     status: Mapped[ComplianceFlagStatus] = mapped_column(

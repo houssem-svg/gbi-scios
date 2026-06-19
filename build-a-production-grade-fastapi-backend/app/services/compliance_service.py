@@ -22,7 +22,11 @@ from app.services.project_service import get_project
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PENALTY_PERCENTAGE = Decimal("0.30")
+# Per the engineering spec (💡.docx Microservice 2, line 862 + code 898 + JSON 1305):
+#   Penalty_ML = Σ(ItemValue_i × 0.25)
+# The risk_exposures table constrains penalty_rate <= 0.30 (max), but the default
+# rate applied to imported mandatory items is 0.25 (25%).
+DEFAULT_PENALTY_PERCENTAGE = Decimal("0.25")
 
 
 def upload_mandatory_list(db: Session, file: UploadFile) -> MandatoryListUploadResult:

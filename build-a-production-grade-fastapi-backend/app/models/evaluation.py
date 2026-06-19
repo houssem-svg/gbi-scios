@@ -80,8 +80,11 @@ class EvaluationCriteria(Base):
     rhq_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Per the engineering spec (💡.docx Microservice 2, line 870 + code 902-910):
+    #   FinalPenalty = min(TotalCalculatedPenalties, P_eval × 0.20)
+    # Default risk cap is 20% of the winning bid value.
     risk_cap_pct: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2), nullable=False, default=Decimal("25.00"), server_default="25.00"
+        Numeric(5, 2), nullable=False, default=Decimal("20.00"), server_default="20.00"
     )
     waiver_cap_pct: Mapped[Decimal] = mapped_column(
         Numeric(5, 2), nullable=False, default=Decimal("10.00"), server_default="10.00"

@@ -81,7 +81,7 @@ def upgrade() -> None:
             server_default="imported_mandatory_item",
             nullable=False,
         ),
-        sa.Column("penalty_percentage", sa.Numeric(5, 4), server_default="0.30", nullable=False),
+        sa.Column("penalty_percentage", sa.Numeric(5, 4), server_default="0.25", nullable=False),
         sa.Column("exposure_amount", sa.Numeric(18, 4), nullable=False),
         sa.Column("status", flag_status, server_default="open", nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),

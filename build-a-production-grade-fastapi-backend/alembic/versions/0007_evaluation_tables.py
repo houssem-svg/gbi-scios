@@ -141,7 +141,7 @@ def upgrade() -> None:
         sa.Column(
             "risk_cap_pct",
             sa.Numeric(5, 2),
-            server_default="25.00",
+            server_default="20.00",
             nullable=False,
         ),
         sa.Column(
