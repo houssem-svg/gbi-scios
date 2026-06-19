@@ -1,0 +1,48 @@
+# ─── Secrets & environment ───────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Databases (never commit local SQLite DBs) ──────────────────────────
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+build-a-production-grade-fastapi-backend/gbi_scios.db
+
+# ─── Generated artifacts (Data Sovereignty: never commit generated PDFs / logs) ──
+build-a-production-grade-fastapi-backend/storage/reports/*.pdf
+build-a-production-grade-fastapi-backend/storage/uploads/
+build-a-production-grade-fastapi-backend/storage/parsing_logs/*.jsonl
+build-a-production-grade-fastapi-backend/storage/compliance_scan_logs/*.jsonl
+build-a-production-grade-fastapi-backend/storage/compliance_scan_logs/*/
+!build-a-production-grade-fastapi-backend/storage/uploads/.gitkeep
+!build-a-production-grade-fastapi-backend/storage/parsing_logs/.gitkeep
+!build-a-production-grade-fastapi-backend/storage/compliance_scan_logs/.gitkeep
+!build-a-production-grade-fastapi-backend/storage/reports/.gitkeep
+
+# ─── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Node / Next.js ─────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+build/
+dist/
+*.log
+.DS_Store
+
+# ─── Editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
