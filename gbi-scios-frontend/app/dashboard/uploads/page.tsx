@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Folder, Trash2, FileText, CheckCircle2, AlertCircle } from "lucide-react";
 import DragDrop from "@/components/uploads/DragDrop";
 import ProgressBar from "@/components/uploads/ProgressBar";
@@ -31,40 +31,46 @@ export default function UploadCenterPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
+  // FE-15: wrap loader in useCallback so it can be a stable dep of useEffect.
+  const fetchProjects = useCallback(async () => {
+    try {
+      const data = await projectService.getAllProjects({ skip: 0, limit: 100 });
+      setProjects(data);
+      if (data.length > 0) {
+        setSelectedProjectId(data[0].id);
+      }
+    } catch {
+      setStatusMsg({ type: "error", text: "Failed to fetch project scopes." });
+    }
+  }, []);
+
   // Initialize Projects
   useEffect(() => {
-    const fetchProjects = async () => {
-      try {
-        const data = await projectService.getAllProjects();
-        setProjects(data);
-        if (data.length > 0) {
-          setSelectedProjectId(data[0].id);
-        }
-      } catch {
-        setStatusMsg({ type: "error", text: "Failed to fetch project scopes." });
-      }
-    };
     fetchProjects();
+  }, [fetchProjects]);
+
+  // FE-15: wrap files loader in useCallback; takes projectId as arg so it
+  // can be a stable dep of the selectedProjectId effect.
+  const fetchFiles = useCallback(async (projectId: string) => {
+    setLoadingFiles(true);
+    try {
+      const data = await uploadService.getFilesByProject(projectId, {
+        skip: 0,
+        limit: 100,
+      });
+      setFiles(Array.isArray(data) ? data : []);
+    } catch {
+      setStatusMsg({ type: "error", text: "Failed to retrieve uploaded files." });
+    } finally {
+      setLoadingFiles(false);
+    }
   }, []);
 
   // Fetch Files on Project Change
   useEffect(() => {
     if (!selectedProjectId) return;
-
-    const fetchFiles = async () => {
-      setLoadingFiles(true);
-      try {
-        const data = await uploadService.getFilesByProject(selectedProjectId);
-        setFiles(Array.isArray(data) ? data : []);
-      } catch {
-        setStatusMsg({ type: "error", text: "Failed to retrieve uploaded files." });
-      } finally {
-        setLoadingFiles(false);
-      }
-    };
-
-    fetchFiles();
-  }, [selectedProjectId]);
+    fetchFiles(selectedProjectId);
+  }, [selectedProjectId, fetchFiles]);
 
   const handleFileUpload = async (file: File) => {
     if (!selectedProjectId) {

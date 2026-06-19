@@ -85,9 +85,25 @@ export const uploadService = {
     });
   },
 
-  /** GET /uploads/project/{projectId} → UploadedFile[] */
-  async getFilesByProject(projectId: string): Promise<UploadedFile[]> {
-    return apiClient.get<UploadedFile[]>(`/uploads/project/${projectId}`);
+  /**
+   * GET /uploads/project/{projectId}?skip=&limit= → UploadedFile[].
+   *
+   * Audit item C-1/P-18: pass skip/limit so the backend can paginate when
+   * support lands. For now, callers should be prepared to receive the full
+   * list (the backend currently ignores these params).
+   */
+  async getFilesByProject(
+    projectId: string,
+    options?: { skip?: number; limit?: number },
+  ): Promise<UploadedFile[]> {
+    const skip = options?.skip ?? 0;
+    const limit = options?.limit ?? 20;
+    return apiClient.get<UploadedFile[]>(`/uploads/project/${projectId}`, {
+      params: {
+        skip: String(skip),
+        limit: String(limit),
+      },
+    });
   },
 
   /** DELETE /uploads/{id} → 204 No Content */

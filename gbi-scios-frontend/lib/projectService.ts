@@ -42,8 +42,27 @@ const mapBackendToFrontend = (backendProject: BackendProjectRead): Project => ({
 });
 
 export const projectService = {
-  async getAllProjects(): Promise<Project[]> {
-    const response = await apiClient.get<BackendProjectRead[]>("/projects");
+  /**
+   * GET /projects?skip=&limit= — list projects.
+   *
+   * The backend list endpoint may not yet honor skip/limit (audit item
+   * C-1/P-18 — another agent is adding support). We always pass the params;
+   * if the backend ignores them we simply get the full list back and the
+   * caller can paginate client-side.
+   *
+   * `options.skip` / `options.limit` default to 0 / 20 per the audit rec.
+   */
+  async getAllProjects(
+    options?: { skip?: number; limit?: number },
+  ): Promise<Project[]> {
+    const skip = options?.skip ?? 0;
+    const limit = options?.limit ?? 20;
+    const response = await apiClient.get<BackendProjectRead[]>("/projects", {
+      params: {
+        skip: String(skip),
+        limit: String(limit),
+      },
+    });
     return Array.isArray(response) ? response.map(mapBackendToFrontend) : [];
   },
 

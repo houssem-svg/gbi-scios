@@ -4,9 +4,27 @@ import { apiClient, API_BASE_URL } from "./api";
 import { GenerateReportInput, Report, ReportListResponse } from "@/types/report";
 
 export const reportingService = {
-  async getReportsByProject(projectId: string): Promise<Report[]> {
+  /**
+   * GET /reporting/project/{projectId}?skip=&limit= → Report[] (or
+   * { reports: Report[], total: number }).
+   *
+   * Audit item C-1/P-18: pass skip/limit. The backend may not honor them
+   * yet; callers should still handle a full-list response.
+   */
+  async getReportsByProject(
+    projectId: string,
+    options?: { skip?: number; limit?: number },
+  ): Promise<Report[]> {
+    const skip = options?.skip ?? 0;
+    const limit = options?.limit ?? 20;
     const response = await apiClient.get<ReportListResponse | Report[]>(
       `/reporting/project/${projectId}`,
+      {
+        params: {
+          skip: String(skip),
+          limit: String(limit),
+        },
+      },
     );
     if (Array.isArray(response)) return response;
     // Backend returns { reports: Report[], total: number }

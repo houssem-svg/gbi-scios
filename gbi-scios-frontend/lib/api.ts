@@ -110,7 +110,26 @@ export const apiClient = {
       throw new Error("Session expired. Please sign in again.");
     }
 
-    if (response.status === 204 || response.headers.get("content-length") === "0") {
+    // FE-13: empty-body handling.
+    //
+    // Previously ANY response with content-length:0 (or a 204) was
+    // short-circuited to `{}`. That broke GETs on chunked-transfer responses
+    // where some servers omit Content-Length entirely — they'd arrive with a
+    // `0` content-length header by mistake and we'd swallow the real JSON
+    // body. Now:
+    //   - 204 No Content → always `{}` (correct per RFC).
+    //   - non-GET (POST/PUT/DELETE) with content-length:0 → `{}` (the typical
+    //     "create returned nothing useful" case; mirrors DELETE semantics).
+    //   - GET responses are NEVER short-circuited on content-length alone —
+    //     we fall through to the normal JSON parse path (which gracefully
+    //     handles a genuinely empty body via the catch below).
+    const contentLength = response.headers.get("content-length");
+    const isMethodWithNoBodyExpected =
+      restOptions.method !== "GET" && restOptions.method !== "HEAD";
+    if (
+      response.status === 204 ||
+      (isMethodWithNoBodyExpected && contentLength === "0")
+    ) {
       return {} as T;
     }
 
@@ -127,7 +146,21 @@ export const apiClient = {
               : `HTTP Error: ${response.status}`;
         throw new Error(errorMessage);
       }
-      return response.json() as Promise<T>;
+      // FE-13: tolerate genuinely-empty 200/2xx JSON bodies (e.g. an empty
+      // list endpoint that returns "" instead of "[]") without throwing
+      // "Unexpected end of JSON input".
+      const text = await response.text();
+      if (!text || text.trim() === "") {
+        return {} as T;
+      }
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        // Malformed JSON — surface a clear error rather than crashing.
+        throw new Error(
+          `Server returned malformed JSON (HTTP ${response.status}).`,
+        );
+      }
     }
 
     // Non-JSON response (e.g. PDF download stream).

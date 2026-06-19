@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Edit2, Trash2, Folder, ShieldX, UploadCloud, Loader2 } from "lucide-react";
 import { Project, ProjectStatus } from "@/types/project";
+import Pagination from "@/components/common/Pagination";
 
 interface ProjectsTableProps {
   projects: Project[];
@@ -10,6 +11,8 @@ interface ProjectsTableProps {
   onEditClick: (project: Project) => void;
   onDeleteClick: (project: Project) => void;
 }
+
+const PAGE_SIZE = 10;
 
 const STATUS_COLORS: Record<ProjectStatus, string> = {
   Planning: "bg-slate-700 text-slate-200",
@@ -21,6 +24,7 @@ const STATUS_COLORS: Record<ProjectStatus, string> = {
 
 export default function ProjectsTable({ projects, loading, onEditClick, onDeleteClick }: ProjectsTableProps) {
   const [uploadingProjectId, setUploadingProjectId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, projectId: string) => {
     const file = e.target.files?.[0];
@@ -86,9 +90,16 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
     );
   }
 
+  // FE-15 (C-1/P-18): client-side pagination slice.
+  const total = projects.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const startIdx = (safePage - 1) * PAGE_SIZE;
+  const pagedProjects = projects.slice(startIdx, startIdx + PAGE_SIZE);
+
   return (
-    <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-      <div className="overflow-x-auto">
+    <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col">
+      <div className="overflow-x-auto flex-1">
         <table className="w-full text-left text-sm whitespace-nowrap">
           <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800">
             <tr>
@@ -100,7 +111,7 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/50">
-            {projects.map((project) => (
+            {pagedProjects.map((project) => (
               <tr key={project.id} className="hover:bg-slate-800/30 transition-colors group">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
@@ -163,6 +174,12 @@ export default function ProjectsTable({ projects, loading, onEditClick, onDelete
           </tbody>
         </table>
       </div>
+      <Pagination
+        page={safePage}
+        pageSize={PAGE_SIZE}
+        total={total}
+        onPageChange={setPage}
+      />
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, FolderKanban, FileText, LogOut } from "lucide-react";
+import { LayoutDashboard, FolderKanban, FileText, LogOut, Scale } from "lucide-react";
 import { useAuth } from "@/components/providers/AuthProvider";
 
 interface NavItem {
@@ -14,6 +14,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { name: "Executive Summary", icon: LayoutDashboard, href: "/dashboard" },
   { name: "Projects Workspace", icon: FolderKanban, href: "/dashboard/projects" },
+  { name: "Bid Evaluation", icon: Scale, href: "/dashboard/evaluations" },
   { name: "Sovereign Reports", icon: FileText, href: "/dashboard/reports" },
   { name: "Upload Center", icon: LayoutDashboard, href: "/dashboard/uploads" },
 ];

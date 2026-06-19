@@ -2,60 +2,88 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Activity, ShieldCheck, AlertOctagon, FileLineChart, Loader2 } from "lucide-react";
 import { reportingService } from "@/lib/reportingService";
 import { projectService } from "@/lib/projectService";
 import { Report } from "@/types/report";
 import { Project } from "@/types/project";
 import ReportCard from "@/components/reports/ReportCard";
+import Pagination from "@/components/common/Pagination";
+
+const REPORTS_PAGE_SIZE = 9;
 
 export default function SovereignReportsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  
+
   const [reports, setReports] = useState<Report[]>([]);
+  const [reportsPage, setReportsPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const initProjects = async () => {
-      try {
-        const data = await projectService.getAllProjects();
-        setProjects(data);
-        if (data.length > 0) setSelectedProjectId(data[0].id);
-      } catch (err: any) {
-        setError(`Failed to fetch project bounds: ${err.message || "Unknown error"}`);
-      }
-    };
-    initProjects();
+  // FE-15 (useCallback + exhaustive-deps): project list loader is stable.
+  const loadProjects = useCallback(async () => {
+    try {
+      const data = await projectService.getAllProjects({
+        skip: 0,
+        limit: 100,
+      });
+      setProjects(data);
+      if (data.length > 0) setSelectedProjectId(data[0].id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(`Failed to fetch project bounds: ${msg}`);
+    }
   }, []);
 
   useEffect(() => {
-    if (!selectedProjectId) return;
-    fetchReports();
-  }, [selectedProjectId]);
+    loadProjects();
+  }, [loadProjects]);
 
-  const fetchReports = async () => {
-    setLoading(true);
-    try {
-      const data: any = await reportingService.getReportsByProject(selectedProjectId);
-      
-      // استخراج المصفوفة سواء كانت مباشرة أو بداخل مفتاح آخر أو إرجاع مصفوفة فارغة لتجنب خطأ data.sort
-      const reportsArray = Array.isArray(data) ? data : (data?.reports || data?.data || []);
-      
-      if (Array.isArray(reportsArray)) {
-        setReports(reportsArray.sort((a: Report, b: Report) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
-      } else {
-        setReports([]);
+  // FE-15: reports loader is wrapped in useCallback so it can be a dep
+  // of the selectedProjectId effect without re-creating each render.
+  const fetchReports = useCallback(
+    async (projectId: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data: Report[] = await reportingService.getReportsByProject(
+          projectId,
+          { skip: 0, limit: 100 },
+        );
+        const reportsArray = Array.isArray(data)
+          ? data
+          : (data as unknown as { reports?: Report[] })?.reports ??
+            (data as unknown as { data?: Report[] })?.data ??
+            [];
+        if (Array.isArray(reportsArray)) {
+          setReports(
+            [...reportsArray].sort(
+              (a, b) =>
+                new Date(b.created_at).getTime() -
+                new Date(a.created_at).getTime(),
+            ),
+          );
+        } else {
+          setReports([]);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        setError(`Failed to synchronize reporting telemetry: ${msg}`);
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(`Failed to synchronize reporting telemetry: ${err.message || "Unknown error"}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    setReportsPage(1);
+    fetchReports(selectedProjectId);
+  }, [selectedProjectId, fetchReports]);
 
   const handleGenerateReport = async () => {
     if (!selectedProjectId) return;
@@ -63,9 +91,11 @@ export default function SovereignReportsPage() {
     setError(null);
     try {
       await reportingService.generateReport({ project_id: selectedProjectId });
-      await fetchReports();
-    } catch (err: any) {
-      setError(err.message || "Engine failed to compile report matrix.");
+      await fetchReports(selectedProjectId);
+      setReportsPage(1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Engine failed to compile report matrix.";
+      setError(msg);
     } finally {
       setIsGenerating(false);
     }
@@ -74,17 +104,28 @@ export default function SovereignReportsPage() {
   const handleDownload = async (id: number, filename: string) => {
     try {
       await reportingService.downloadReport(id, filename);
-    } catch (err: any) {
-      alert(err.message || "Failed to establish download stream.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to establish download stream.";
+      alert(msg);
     }
   };
 
-  // Metrics Calculation
+  // Metrics Calculation (computed over the full list — not just the page).
   const getReportRiskScore = (report: Report) =>
     Math.min(100, Math.round(report.json_payload?.exposure_metrics?.exposure_percentage_vs_project_budget ?? 0));
   const avgRisk = reports.length ? Math.round(reports.reduce((acc, curr) => acc + getReportRiskScore(curr), 0) / reports.length) : 0;
-  const completedReports = reports.filter(r => r.status === "COMPLETED").length;
-  const criticalFindings = reports.reduce((acc, curr) => acc + (curr.json_payload?.compliance_summary?.unresolved_violations || 0), 0);
+  const completedReports = reports.filter((r) => r.status === "COMPLETED").length;
+  const criticalFindings = reports.reduce(
+    (acc, curr) => acc + (curr.json_payload?.compliance_summary?.unresolved_violations || 0),
+    0,
+  );
+
+  // FE-15: client-side pagination slice.
+  const totalReports = reports.length;
+  const totalPages = Math.max(1, Math.ceil(totalReports / REPORTS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, reportsPage), totalPages);
+  const startIdx = (safePage - 1) * REPORTS_PAGE_SIZE;
+  const pagedReports = reports.slice(startIdx, startIdx + REPORTS_PAGE_SIZE);
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-500 space-y-6">
@@ -168,11 +209,21 @@ export default function SovereignReportsPage() {
           <p className="text-xs text-slate-500 max-w-sm mt-1">Compile an executive report to extract compliance and risk metrics.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {reports.map((report) => (
-            <ReportCard key={report.id} report={report} onDownload={handleDownload} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {pagedReports.map((report) => (
+              <ReportCard key={report.id} report={report} onDownload={handleDownload} />
+            ))}
+          </div>
+          <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+            <Pagination
+              page={safePage}
+              pageSize={REPORTS_PAGE_SIZE}
+              total={totalReports}
+              onPageChange={setReportsPage}
+            />
+          </div>
+        </>
       )}
     </div>
   );

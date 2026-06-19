@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import ProjectsHeader from "@/components/projects/ProjectsHeader";
 import ProjectsTable from "@/components/projects/ProjectsTable";
-import ProjectModal from "@/components/projects/ProjectModal";
-import DeleteConfirmModal from "@/components/projects/DeleteConfirmModal";
 import { projectService } from "@/lib/projectService";
 import { Project, ProjectCreateInput, ProjectUpdateInput } from "@/types/project";
+
+/**
+ * Audit item C-2/C-5/C-11: lazy-load the modals via next/dynamic so their
+ * react-hook-form + heavy form logic ship only when the user opens them.
+ * Wrapped in <Suspense> with a minimal fallback per spec.
+ */
+const ProjectModal = dynamic(
+  () => import("@/components/projects/ProjectModal"),
+  { ssr: false },
+);
+const DeleteConfirmModal = dynamic(
+  () => import("@/components/projects/DeleteConfirmModal"),
+  { ssr: false },
+);
 
 export default function ProjectsWorkspacePage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -19,11 +32,12 @@ export default function ProjectsWorkspacePage() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
-  const fetchWorkspace = async () => {
+  // FE-15: wrap fetch in useCallback so it can be a stable dep of useEffect.
+  const fetchWorkspace = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await projectService.getAllProjects();
+      const data = await projectService.getAllProjects({ skip: 0, limit: 100 });
       setProjects(data);
       setFilteredProjects(data);
     } catch (err) {
@@ -32,11 +46,11 @@ export default function ProjectsWorkspacePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchWorkspace();
-  }, []);
+  }, [fetchWorkspace]);
 
   const handleSearch = (term: string) => {
     const searchTerm = term.toLowerCase();
@@ -105,19 +119,23 @@ export default function ProjectsWorkspacePage() {
         }}
       />
 
-      <ProjectModal
-        isOpen={isProjectModalOpen}
-        onClose={() => setIsProjectModalOpen(false)}
-        onSubmit={handleFormSubmit}
-        project={selectedProject}
-      />
+      <Suspense fallback={<div>Loading…</div>}>
+        <ProjectModal
+          isOpen={isProjectModalOpen}
+          onClose={() => setIsProjectModalOpen(false)}
+          onSubmit={handleFormSubmit}
+          project={selectedProject}
+        />
+      </Suspense>
 
-      <DeleteConfirmModal
-        isOpen={isDeleteModalOpen}
-        onClose={() => setIsDeleteModalOpen(false)}
-        onConfirm={handleDeleteExecute}
-        projectName={selectedProject?.name || ""}
-      />
+      <Suspense fallback={<div>Loading…</div>}>
+        <DeleteConfirmModal
+          isOpen={isDeleteModalOpen}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onConfirm={handleDeleteExecute}
+          projectName={selectedProject?.name || ""}
+        />
+      </Suspense>
     </div>
   );
 }
