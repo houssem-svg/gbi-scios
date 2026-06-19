@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -28,8 +28,10 @@ def list_for_project(
     project_id: UUID,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> list[UploadedFileRead]:
-    return list_project_uploads(db, project_id, current_user)
+    return list_project_uploads(db, project_id, current_user, skip=skip, limit=limit)
 
 
 @router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)

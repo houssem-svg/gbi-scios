@@ -3,11 +3,13 @@
 """
 
 from app.models.ai import AIInsight, ExecutiveRecommendation, WaiverStrategy
+from app.models.audit import AuditAction, SystemAuditLog
 from app.models.bid import Bid, EvaluationFormula
 from app.models.boq_item import BoQItem, SourcingType
 from app.models.compliance import ComplianceFlag, ComplianceFlagStatus, ViolationType
 from app.models.evaluation import EvaluationCriteria, EvaluationResult
 from app.models.mandatory_list import MandatoryListItem, MandatoryStatus
+from app.models.payroll import PayrollLedger
 from app.models.project import Project, ProjectStatus
 from app.models.reporting import Report, ReportStatus, ReportType
 from app.models.risk import ExposureSimulation, RiskLedger, RiskScenario
@@ -17,6 +19,7 @@ from app.models.user import User, UserRole
 
 __all__ = [
     "AIInsight",
+    "AuditAction",
     "Bid",
     "BoQItem",
     "ComplianceFlag",
@@ -28,6 +31,7 @@ __all__ = [
     "ExposureSimulation",
     "MandatoryListItem",
     "MandatoryStatus",
+    "PayrollLedger",
     "Project",
     "ProjectStatus",
     "Report",
@@ -38,6 +42,7 @@ __all__ = [
     "SourcingType",
     "Supplier",
     "SupplierSizeCategory",
+    "SystemAuditLog",
     "UploadedFile",
     "UploadedFileType",
     "User",

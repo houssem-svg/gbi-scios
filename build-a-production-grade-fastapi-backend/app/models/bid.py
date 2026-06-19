@@ -78,6 +78,20 @@ class Bid(Base):
     custom_lc_weight: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     custom_price_weight: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
 
+    # Pharma advantage: per the engineering spec (💡.docx Microservice 1, line 812-813):
+    #   P_adjusted = P_eval × (1 - PharmaDiscountRate)
+    # Optional per-bid discount rate (0.0–1.0) applied to the submitted price
+    # BEFORE the SME preference and scoring. Default 0 (no pharma discount).
+    pharma_discount_rate: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    pharma_discount_applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     sme_preference_applied: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

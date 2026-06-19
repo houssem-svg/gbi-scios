@@ -133,6 +133,7 @@ def create_bid(
         evaluation_formula=payload.evaluation_formula,
         custom_lc_weight=payload.custom_lc_weight,
         custom_price_weight=payload.custom_price_weight,
+        pharma_discount_rate=payload.pharma_discount_rate,
     )
     db.add(bid)
     db.commit()
@@ -258,9 +259,21 @@ def run_evaluation(
         effective_price = bid.submitted_price
         lc_score = bid.local_content_score
 
-        # --- SME 10% price preference (Rule 5) ---------------------------
+        # --- Pharma advantage (💡.docx Microservice 1, line 812-813) ------
+        # P_adjusted = P_eval × (1 - PharmaDiscountRate)
+        # Applied FIRST (before SME preference) per the spec's adjust_bid_price
+        # code which applies pharma discount before SME.
+        pharma_rate = bid.pharma_discount_rate or _ZERO
+        if pharma_rate > 0:
+            effective_price = effective_price * (_HUNDRED - pharma_rate * _HUNDRED) / _HUNDRED
+            bid.pharma_discount_applied = True
+        else:
+            bid.pharma_discount_applied = False
+
+        # --- SME 10% price preference (Rule 3) ---------------------------
+        # Applied to the (already pharma-adjusted) price.
         if supplier is not None and _monshaat_valid(supplier, today):
-            effective_price = bid.submitted_price * (_HUNDRED - sme_pct) / _HUNDRED
+            effective_price = effective_price * (_HUNDRED - sme_pct) / _HUNDRED
             bid.sme_preference_applied = True
         else:
             bid.sme_preference_applied = False
@@ -279,6 +292,8 @@ def run_evaluation(
         breakdown["effective_price"] = str(effective_price)
         breakdown["lc_score_raw"] = str(lc_score)
         breakdown["tadawul_bonus_pts"] = str(tadawul_bonus_pts)
+        breakdown["pharma_discount_rate"] = str(pharma_rate)
+        breakdown["pharma_discount_applied"] = bid.pharma_discount_applied
         breakdown["sme_preference_applied"] = bid.sme_preference_applied
         breakdown["tadawul_bonus_applied"] = bid.tadawul_bonus_applied
 

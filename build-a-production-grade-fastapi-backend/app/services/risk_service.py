@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.compliance import ComplianceFlag, ComplianceFlagStatus
+from app.models.payroll import PayrollLedger
 from app.models.risk import RiskLedger
 from app.services.executive_summary_service import generate_summary_and_actions
 
@@ -21,14 +22,43 @@ def calculate_severity(exposure: float) -> str:
     return "CRITICAL"
 
 
+def _compute_payroll_leakage(db: Session, project_id: uuid.UUID) -> float:
+    """Compute the real LCP payroll leakage from stored PayrollLedger rows.
+
+    Per the engineering spec (💡.docx line 874):
+        Exposure = Penalty_ML + PayrollLeakage + SubcontractorLeakage
+
+    PayrollLeakage = SaudiPayroll × (1 − recognition_factor) + ExpatPayroll
+                   = SaudiPayroll × 0.466 + ExpatPayroll
+
+    Returns 0.0 when no payroll ledgers exist for the project.
+    """
+    ledgers = list(
+        db.scalars(
+            select(PayrollLedger).where(PayrollLedger.project_id == project_id)
+        ).all()
+    )
+    if not ledgers:
+        return 0.0
+
+    saudi_total = sum((Decimal(l.saudi_payroll) for l in ledgers), Decimal("0"))
+    expat_total = sum((Decimal(l.expat_payroll) for l in ledgers), Decimal("0"))
+
+    factor = Decimal(str(settings.saudi_payroll_recognition_factor))
+    leakage_factor = Decimal("1") - factor
+    saudi_leakage = saudi_total * leakage_factor
+    total_leakage = saudi_leakage + expat_total
+    return float(total_leakage)
+
+
 def calculate_project_risk(db: Session, project_id: str | uuid.UUID):
     """Compute the financial risk profile for a project.
 
-    Only OPEN compliance flags count toward exposure (WAIVED/RESOLVED flags are
-    excluded). Payroll leakage is computed using the LCP recognition factor
-    (53.4% of Saudi payroll is recognized as local content; the remaining
-    46.6% is leakage). Until a PayrollRecord model exists, payroll leakage
-    is reported as 0.0 — never a fabricated 7% of exposure.
+    Total exposure = OPEN compliance-flag exposure + LCP payroll leakage.
+    Only OPEN flags count (WAIVED/RESOLVED are excluded). Payroll leakage is
+    computed from real PayrollLedger rows using the LCP recognition factor
+    (53.4% of Saudi payroll is recognized; 46.6% is leakage; 100% of expat
+    payroll is leakage).
     """
     if isinstance(project_id, str):
         try:
@@ -50,10 +80,8 @@ def calculate_project_risk(db: Session, project_id: str | uuid.UUID):
     ) or Decimal("0")
     total_exposure = float(total_exposure_decimal)
 
-    # LCP payroll leakage: 46.6% of Saudi payroll is value leakage outside the Kingdom.
-    # (53.4% is recognized as local content per the Local Content Program methodology.)
-    # Until a PayrollRecord feed exists, this is 0.0 — NOT a fabricated 7% of exposure.
-    payroll_leakage = 0.0
+    # LCP payroll leakage from real PayrollLedger data (0.0 if no ledgers).
+    payroll_leakage = _compute_payroll_leakage(db, valid_project_id)
     total_sovereign_exposure = total_exposure + payroll_leakage
 
     severity = calculate_severity(total_sovereign_exposure)

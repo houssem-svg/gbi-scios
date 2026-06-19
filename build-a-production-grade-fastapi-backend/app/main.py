@@ -12,6 +12,7 @@ from app.routers.compliance import router as compliance_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.evaluations import router as evaluations_router
 from app.routers.parsing import router as parsing_router
+from app.routers.payroll import router as payroll_router
 from app.routers.projects import router as projects_router
 from app.routers.reporting import router as reporting_router
 from app.routers.risk import router as risk_router
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(reporting_router)
     app.include_router(dashboard_router)
     app.include_router(evaluations_router)
+    app.include_router(payroll_router)
 
     @app.get("/health", tags=["Health"])
     def health_check() -> dict[str, str]:

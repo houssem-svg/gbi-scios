@@ -78,9 +78,8 @@ def parse_boq_upload(db: Session, uploaded_file_id: UUID, current_user: User) ->
     db.execute(delete(BoQItem).where(BoQItem.uploaded_file_id == uploaded_file.id))
     db.add_all(boq_items)
     db.commit()
-
-    for item in boq_items:
-        db.refresh(item)
+    # expire_on_commit=False in SessionLocal → boq_items attributes are still
+    # populated; no need for per-row db.refresh (was N extra SELECTs).
 
     _write_parsing_audit_log(uploaded_file, parser_result)
     return BoQParseResult(
@@ -91,12 +90,20 @@ def parse_boq_upload(db: Session, uploaded_file_id: UUID, current_user: User) ->
     )
 
 
-def list_project_boq_items(db: Session, project_id: UUID, current_user: User) -> list[BoQItem]:
+def list_project_boq_items(
+    db: Session,
+    project_id: UUID,
+    current_user: User,
+    skip: int = 0,
+    limit: int = 100,
+) -> list[BoQItem]:
     get_project(db, project_id, current_user)
     statement = (
         select(BoQItem)
         .where(BoQItem.project_id == project_id)
         .order_by(BoQItem.created_at.desc(), BoQItem.item_code.asc())
+        .offset(skip)
+        .limit(limit)
     )
     return list(db.scalars(statement).all())
 

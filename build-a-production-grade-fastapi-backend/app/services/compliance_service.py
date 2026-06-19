@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.models.boq_item import BoQItem, SourcingType
@@ -154,12 +154,22 @@ def list_project_compliance_flags(
     db: Session,
     project_id: UUID,
     current_user: User,
+    skip: int = 0,
+    limit: int = 100,
 ) -> list[ComplianceFlag]:
     get_project(db, project_id, current_user)
+    # Eager-load boq_item + mandatory_item to avoid N+1 queries when the
+    # caller (router → enrich_compliance_flag) accesses those relationships.
     statement = (
         select(ComplianceFlag)
+        .options(
+            selectinload(ComplianceFlag.boq_item),
+            selectinload(ComplianceFlag.mandatory_item),
+        )
         .where(ComplianceFlag.project_id == project_id)
         .order_by(ComplianceFlag.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     return list(db.scalars(statement).all())
 

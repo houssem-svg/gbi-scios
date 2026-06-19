@@ -16,6 +16,10 @@ class BidBase(BaseModel):
     evaluation_formula: EvaluationFormula = EvaluationFormula.SIXTY_FORTY
     custom_lc_weight: Decimal | None = Field(default=None, ge=0, le=100)
     custom_price_weight: Decimal | None = Field(default=None, ge=0, le=100)
+    # Optional pharma discount rate (0.0–1.0). Applied to submitted_price
+    # BEFORE the SME preference per the engineering spec (💡.docx line 812-813):
+    #   P_adjusted = P_eval × (1 - PharmaDiscountRate)
+    pharma_discount_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
 
 
 class BidCreate(BidBase):
@@ -27,6 +31,7 @@ class BidRead(BidBase):
     project_id: UUID
     sme_preference_applied: bool
     tadawul_bonus_applied: bool
+    pharma_discount_applied: bool
     effective_price: Decimal | None
     final_score: Decimal | None
     rank: int | None
@@ -40,6 +45,7 @@ class BidRead(BidBase):
         "local_content_score",
         "custom_lc_weight",
         "custom_price_weight",
+        "pharma_discount_rate",
         "effective_price",
         "final_score",
     )
