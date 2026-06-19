@@ -38,6 +38,19 @@ function formatDate(iso: string): string {
   }
 }
 
+/**
+ * BUG FIX: the backend UploadedFileType enum returns UPPERCASE values
+ * ("CSV", "EXCEL", "PDF"). The previous code checked for lowercase
+ * ("csv", "excel") so the parse step was NEVER triggered — leaving the
+ * DB with zero BoQ items and the compliance scan returning 0.
+ * This helper normalises both sides so the chain always runs.
+ */
+function isParsableBoQ(fileType: string | undefined | null): boolean {
+  if (!fileType) return false;
+  const t = fileType.toLowerCase();
+  return t === "csv" || t === "excel";
+}
+
 export default function UploadsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -97,7 +110,12 @@ export default function UploadsPage() {
     }
   }, [selectedProjectId, loadFiles]);
 
-  // Upload + parse handler
+  /**
+   * BUG FIX: chained upload → parse. Previously the parse call was gated
+   * behind a lowercase check that never matched the backend's uppercase
+   * enum values, so parsing was silently skipped. Now we always parse
+   * Excel/CSV uploads immediately after a successful upload.
+   */
   const handleFile = async (file: File) => {
     if (!selectedProjectId) {
       setError("Please select a project first.");
@@ -119,25 +137,40 @@ export default function UploadsPage() {
     setSuccess(null);
 
     try {
-      // 1. Upload
+      // 1. Upload the file to storage + create UploadedFile record
       const uploaded = await uploadService.uploadFileWithProgress(
         file,
         selectedProjectId,
         (pct) => setProgress(pct),
       );
-      setSuccess(`Uploaded "${uploaded.original_filename}" successfully.`);
 
-      // Refresh file list
+      // Refresh the file list so the new file appears
       await loadFiles(selectedProjectId);
 
-      // 2. Parse (only Excel/CSV — skip PDF)
-      if (uploaded.file_type === "csv" || uploaded.file_type === "excel") {
+      // 2. CHAIN: immediately parse the file into BoQ items.
+      //    This is the critical step that was being skipped — without it
+      //    the DB has zero BoQ items and the compliance scan returns 0.
+      if (isParsableBoQ(uploaded.file_type)) {
         setParsingId(uploaded.id);
+        setSuccess(`Uploaded. Parsing "${uploaded.original_filename}"…`);
         const result = await parsingService.parseBoq(uploaded.id);
         setBoqItems(result.items);
-        setSuccess(
-          `Parsed ${result.parsed_rows} rows from "${uploaded.original_filename}".`,
-        );
+
+        if (result.parsed_rows > 0) {
+          setSuccess(
+            `✓ Uploaded and parsed ${result.parsed_rows} BoQ items from "${uploaded.original_filename}". You can now run a compliance scan.`,
+          );
+        } else if (result.validation_errors.length > 0) {
+          setSuccess(
+            `File uploaded but ${result.failed_rows} rows failed validation. Check the file format and try again.`,
+          );
+        } else {
+          setSuccess(
+            `File uploaded but no rows were parsed. Ensure the file has headers: item_code, description, quantity, unit_price, total_value, sourcing_type.`,
+          );
+        }
+      } else {
+        setSuccess(`Uploaded "${uploaded.original_filename}".`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload/parse failed.");
@@ -170,7 +203,11 @@ export default function UploadsPage() {
     try {
       const result = await parsingService.parseBoq(fileId);
       setBoqItems(result.items);
-      setSuccess(`Parsed ${result.parsed_rows} rows.`);
+      setSuccess(
+        result.parsed_rows > 0
+          ? `Parsed ${result.parsed_rows} rows successfully.`
+          : `No rows parsed. Check the file format.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Parse failed.");
     } finally {
@@ -201,7 +238,7 @@ export default function UploadsPage() {
         {loadingProjects ? (
           <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
         ) : projects.length === 0 ? (
-          <span className="text-sm text-slate-500">No projects available.</span>
+          <span className="text-sm text-slate-500">No projects available. Create one in Projects Workspace first.</span>
         ) : (
           <select
             id="proj"
@@ -281,6 +318,11 @@ export default function UploadsPage() {
                     />
                   </div>
                 </div>
+              ) : parsingId ? (
+                <div className="space-y-2">
+                  <Loader2 className="w-10 h-10 mx-auto animate-spin text-blue-400" />
+                  <p className="text-sm text-slate-300">Parsing BoQ items…</p>
+                </div>
               ) : (
                 <div className="space-y-2">
                   <FileSpreadsheet className="w-10 h-10 mx-auto text-slate-500" />
@@ -289,6 +331,9 @@ export default function UploadsPage() {
                   </p>
                   <p className="text-xs text-slate-500">
                     Accepted: .csv, .xlsx, .xls — Max 25 MB
+                  </p>
+                  <p className="text-[10px] text-slate-600 mt-2">
+                    Required columns: item_code, description, quantity, unit_price, total_value, sourcing_type
                   </p>
                 </div>
               )}
@@ -324,7 +369,7 @@ export default function UploadsPage() {
                         {f.file_type} · {formatDate(f.uploaded_at)}
                       </p>
                     </div>
-                    {(f.file_type === "csv" || f.file_type === "excel") && (
+                    {isParsableBoQ(f.file_type) && (
                       <button
                         onClick={() => handleParseExisting(f.id)}
                         disabled={parsingId === f.id}
@@ -403,7 +448,7 @@ export default function UploadsPage() {
                     <td className="py-2 px-2 text-center">
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                          item.sourcing_type === "imported"
+                          item.sourcing_type?.toLowerCase() === "imported"
                             ? "bg-red-900/40 text-red-400"
                             : "bg-emerald-900/40 text-emerald-400"
                         }`}
@@ -415,6 +460,13 @@ export default function UploadsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="mt-4 p-3 bg-blue-950/20 border border-blue-900/30 rounded-md text-xs text-blue-300">
+            ✓ {boqItems.length} items parsed successfully. Head to{" "}
+            <a href="/dashboard/compliance" className="underline hover:text-blue-200">
+              Compliance &amp; Gaps
+            </a>{" "}
+            to run a scan against the mandatory list.
           </div>
         </div>
       )}

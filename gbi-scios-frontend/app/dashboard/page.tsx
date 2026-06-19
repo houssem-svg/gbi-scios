@@ -10,6 +10,8 @@ import {
   FileBarChart,
   RefreshCw,
   ChevronRight,
+  Info,
+  UploadCloud,
 } from "lucide-react";
 import { projectService } from "@/lib/projectService";
 import { riskService, type RiskDashboard } from "@/lib/riskService";
@@ -30,6 +32,21 @@ const SEVERITY_STYLES: Record<string, string> = {
   HIGH: "text-orange-400 bg-orange-900/30",
   CRITICAL: "text-red-400 bg-red-900/30",
 };
+
+/**
+ * Classify a backend error as "no data yet" vs a real failure.
+ * When the project has no parsed BoQ items, the risk endpoint returns
+ * an empty/zero exposure — we detect that and show a friendly empty-state
+ * instead of a scary red error.
+ */
+function isNoDataState(risk: RiskDashboard | null): boolean {
+  if (!risk) return false;
+  return (
+    risk.total_exposure === 0 &&
+    risk.payroll_leakage === 0 &&
+    (risk.risk_breakdown?.length ?? 0) === 0
+  );
+}
 
 export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -59,7 +76,13 @@ export default function DashboardPage() {
     loadProjects();
   }, [loadProjects]);
 
-  // Calculate risk when project changes
+  /**
+   * BUG FIX: graceful error handling. Previously any backend error
+   * (e.g. risk calculation on a project with no BoQ items) surfaced as
+   * a raw "Failed to fetch" red banner. Now we detect the "no data yet"
+   * state and show a friendly empty-state guiding the user to upload +
+   * parse BoQ files first.
+   */
   const calculateRisk = useCallback(async (projectId: string) => {
     if (!projectId) return;
     setLoadingRisk(true);
@@ -67,9 +90,29 @@ export default function DashboardPage() {
     try {
       const result = await riskService.calculateRisk(projectId);
       setRisk(result);
+      // If the backend returned an empty/zero state, show the friendly
+      // empty-state message instead of the bare metric cards.
+      if (isNoDataState(result)) {
+        setError(null); // not an error — just no data yet
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Risk calculation failed.");
+      // Distinguish "no data" (404/400 from backend) vs a real failure.
+      const msg = err instanceof Error ? err.message : "";
       setRisk(null);
+      if (
+        msg.toLowerCase().includes("not found") ||
+        msg.toLowerCase().includes("no data") ||
+        msg.toLowerCase().includes("no boq") ||
+        msg.toLowerCase().includes("empty")
+      ) {
+        // Friendly empty-state — not a scary error.
+        setError(null);
+      } else {
+        // Genuine failure — show a clear, actionable message.
+        setError(
+          `Could not load risk data. ${msg || "Please ensure you have uploaded and parsed a BoQ file for this project, then try again."}`,
+        );
+      }
     } finally {
       setLoadingRisk(false);
     }
@@ -92,14 +135,20 @@ export default function DashboardPage() {
         report_type: "EXECUTIVE",
       });
       setSuccess(`Report #${report.id} generated. Downloading PDF…`);
-      // Trigger PDF download
       await reportingService.downloadReport(
         report.id,
         `executive-report-${report.id}.pdf`,
       );
       setSuccess(`Report #${report.id} downloaded successfully.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Report generation failed.");
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.toLowerCase().includes("not found") || msg.toLowerCase().includes("no data")) {
+        setError(
+          "Cannot generate a report yet. Please upload and parse a BoQ file, then run a compliance scan first.",
+        );
+      } else {
+        setError(`Report generation failed. ${msg}`);
+      }
     } finally {
       setGeneratingReport(false);
     }
@@ -110,6 +159,7 @@ export default function DashboardPage() {
   const payrollLeakage = risk?.payroll_leakage ?? 0;
   const mandatoryExposure = Math.max(0, totalExposure - payrollLeakage);
   const gapPct = totalExposure > 0 ? (totalExposure / (totalExposure + 1)) * 100 : 0;
+  const noData = isNoDataState(risk);
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-500 space-y-6">
@@ -194,6 +244,39 @@ export default function DashboardPage() {
         <div className="flex flex-col items-center justify-center py-20 gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
           <p className="text-sm text-slate-500">Calculating financial exposure…</p>
+        </div>
+      ) : noData ? (
+        /* ── FRIENDLY EMPTY-STATE ─────────────────────────────────── */
+        /* Shown when the project has no parsed BoQ items (total_exposure = 0
+           AND payroll_leakage = 0 AND no risk_breakdown entries). */
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-10 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-900/30 border border-blue-800/50 flex items-center justify-center">
+            <Info className="w-8 h-8 text-blue-400" />
+          </div>
+          <h2 className="text-lg font-semibold text-slate-200 mb-2">
+            No data found for this project
+          </h2>
+          <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
+            To see your financial exposure and risk metrics, you need to upload and
+            parse a BoQ file first. The system will then scan it for compliance
+            violations and calculate your exposure.
+          </p>
+          <div className="flex items-center justify-center gap-3 flex-wrap">
+            <a
+              href="/dashboard/uploads"
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            >
+              <UploadCloud className="w-4 h-4" />
+              Upload BoQ File
+            </a>
+            <a
+              href="/dashboard/compliance"
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            >
+              <ChevronRight className="w-4 h-4" />
+              Go to Compliance
+            </a>
+          </div>
         </div>
       ) : risk ? (
         <>
