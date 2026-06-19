@@ -2,9 +2,20 @@
 
 "use client";
 
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { TopRiskProject } from "@/types/dashboard";
+import dynamic from "next/dynamic";
+import type { TopRiskProject } from "@/types/dashboard";
 
+/**
+ * recharts pulls in a large DOM-heavy dependency tree. Per audit item
+ * C-2/C-5/C-11 we load the whole chart component lazily via next/dynamic
+ * with ssr:false so recharts only ships in the client bundle (no SSR cost,
+ * no hydration warnings from recharts' ResponsiveContainer).
+ *
+ * Previously each recharts sub-component was dynamically imported individually,
+ * which produced TS errors because next/dynamic's type inference doesn't play
+ * well with recharts' class-component defaultProps. Loading one wrapper
+ * component that statically imports recharts avoids that entirely.
+ */
 interface ExposureChartProps {
   data: TopRiskProject[];
 }
@@ -17,7 +28,20 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 1,
   }).format(value || 0);
 
-export default function ExposureChart({ data }: ExposureChartProps) {
+function ExposureChartInner({ data }: ExposureChartProps) {
+  // Lazy-load recharts only inside the client wrapper to keep its types intact.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const {
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer,
+    Cell,
+  } = require("recharts") as typeof import("recharts");
+
   const chartData = data.map((p) => ({
     name: p.project_name ?? p.project_id,
     exposure: p.project_exposure ?? 0,
@@ -68,7 +92,13 @@ export default function ExposureChart({ data }: ExposureChartProps) {
             {chartData.map((entry, idx) => (
               <Cell
                 key={`cell-${idx}`}
-                fill={entry.exposure > 1_000_000 ? "#ef4444" : entry.exposure > 100_000 ? "#f97316" : "#22c55e"}
+                fill={
+                  entry.exposure > 1_000_000
+                    ? "#ef4444"
+                    : entry.exposure > 100_000
+                      ? "#f97316"
+                      : "#22c55e"
+                }
               />
             ))}
           </Bar>
@@ -77,3 +107,16 @@ export default function ExposureChart({ data }: ExposureChartProps) {
     </div>
   );
 }
+
+/**
+ * Default export is a dynamically-loaded wrapper around the inner chart.
+ * ssr:false ensures recharts (which depends on the DOM) never runs on the server.
+ */
+export default dynamic(() => Promise.resolve(ExposureChartInner), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[300px] flex items-center justify-center text-slate-500 text-sm font-mono border border-dashed border-slate-800 rounded-lg mt-4">
+      Loading chart…
+    </div>
+  ),
+});

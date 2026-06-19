@@ -57,13 +57,14 @@ def update_criteria_endpoint(
     return EvaluationCriteriaRead.model_validate(criteria)
 
 
-@router.post("/bids", response_model=BidRead, status_code=status.HTTP_201_CREATED)
+@router.post("/bids/{project_id}", response_model=BidRead, status_code=status.HTTP_201_CREATED)
 def create_bid_endpoint(
+    project_id: UUID,
     payload: BidCreate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> BidRead:
-    bid = create_bid(db, payload.project_id, payload, current_user)
+    bid = create_bid(db, project_id, payload, current_user)
     return BidRead.model_validate(bid)
 
 
