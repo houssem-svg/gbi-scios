@@ -1,270 +1,369 @@
-// app/dashboard/page.tsx
-
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  ShieldCheck,
-  Activity,
-  Briefcase,
+  LayoutDashboard,
+  Loader2,
   AlertTriangle,
+  TrendingDown,
+  Wallet,
+  FileBarChart,
   RefreshCw,
-  ListChecks,
+  ChevronRight,
 } from "lucide-react";
+import { projectService } from "@/lib/projectService";
+import { riskService, type RiskDashboard } from "@/lib/riskService";
+import { reportingService } from "@/lib/reportingService";
+import type { Project } from "@/types/project";
 
-import { dashboardService } from "@/lib/dashboardService";
-import { DashboardSummary } from "@/types/dashboard";
-import MetricCard from "@/components/dashboard/MetricCard";
-import ExposureChart from "@/components/dashboard/ExposureChart";
-
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat("en-US", {
+function formatSAR(value: number): string {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency: "SAR",
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
 
-const formatPercent = (value: number) => `${Math.round(value ?? 0)}%`;
+const SEVERITY_STYLES: Record<string, string> = {
+  LOW: "text-emerald-400 bg-emerald-900/30",
+  MODERATE: "text-amber-400 bg-amber-900/30",
+  HIGH: "text-orange-400 bg-orange-900/30",
+  CRITICAL: "text-red-400 bg-red-900/30",
+};
 
-export default function ExecutiveDashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function DashboardPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [risk, setRisk] = useState<RiskDashboard | null>(null);
+  const [loadingRisk, setLoadingRisk] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const fetchDashboardData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setIsRefreshing(true);
-    setError(null);
+  // Load projects
+  const loadProjects = useCallback(async () => {
+    setLoadingProjects(true);
     try {
-      const data = await dashboardService.getSummary();
-      setSummary(data);
-      setLastRefreshed(new Date());
+      const data = await projectService.getAllProjects({ skip: 0, limit: 100 });
+      setProjects(data);
+      if (data.length > 0) setSelectedProjectId(data[0].id);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(`Failed to fetch dashboard summary: ${msg}`);
+      setError(err instanceof Error ? err.message : "Failed to load projects.");
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      setLoadingProjects(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchDashboardData();
-    // FE-2: keep the 60s auto-refresh but gate on document visibility so a
-    // hidden tab does not keep hammering the backend.
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") {
-        fetchDashboardData(true);
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [fetchDashboardData]);
+    loadProjects();
+  }, [loadProjects]);
 
-  // Loading skeleton.
-  if (loading && !summary) {
-    return (
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="h-8 w-64 bg-slate-900/50 rounded animate-pulse mb-8"></div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-32 bg-slate-900/50 rounded-xl animate-pulse"></div>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 h-[400px] bg-slate-900/50 rounded-xl animate-pulse"></div>
-          <div className="h-[400px] bg-slate-900/50 rounded-xl animate-pulse"></div>
-        </div>
-      </div>
-    );
-  }
+  // Calculate risk when project changes
+  const calculateRisk = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    setLoadingRisk(true);
+    setError(null);
+    try {
+      const result = await riskService.calculateRisk(projectId);
+      setRisk(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Risk calculation failed.");
+      setRisk(null);
+    } finally {
+      setLoadingRisk(false);
+    }
+  }, []);
 
-  const breakdown = summary?.compliance_breakdown;
-  const topRisks = summary?.top_risk_projects ?? [];
+  useEffect(() => {
+    if (selectedProjectId) calculateRisk(selectedProjectId);
+    else setRisk(null);
+  }, [selectedProjectId, calculateRisk]);
+
+  // Generate executive report
+  const handleGenerateReport = async () => {
+    if (!selectedProjectId) return;
+    setGeneratingReport(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const report = await reportingService.generateReport({
+        project_id: selectedProjectId,
+        report_type: "EXECUTIVE",
+      });
+      setSuccess(`Report #${report.id} generated. Downloading PDF…`);
+      // Trigger PDF download
+      await reportingService.downloadReport(
+        report.id,
+        `executive-report-${report.id}.pdf`,
+      );
+      setSuccess(`Report #${report.id} downloaded successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Report generation failed.");
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const severity = risk?.risk_breakdown?.[0]?.severity_level ?? "—";
+  const totalExposure = risk?.total_exposure ?? 0;
+  const payrollLeakage = risk?.payroll_leakage ?? 0;
+  const mandatoryExposure = Math.max(0, totalExposure - payrollLeakage);
+  const gapPct = totalExposure > 0 ? (totalExposure / (totalExposure + 1)) * 100 : 0;
 
   return (
     <div className="max-w-7xl mx-auto animate-in fade-in duration-500 space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100 tracking-tight">Executive Dashboard</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Live enterprise compliance and risk telemetry.
-          </p>
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-blue-900/30 border border-blue-800/50 flex items-center justify-center">
+            <LayoutDashboard className="w-5 h-5 text-blue-400" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-slate-100">Executive Dashboard</h1>
+            <p className="text-xs text-slate-500">
+              Self-audit your financial exposure and payroll leakage before bidding.
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          <span>Last sync: {lastRefreshed.toLocaleTimeString()}</span>
-          <button
-            onClick={() => fetchDashboardData(false)}
-            disabled={isRefreshing}
-            className="p-2 bg-slate-900 border border-slate-800 rounded-lg hover:bg-slate-800 hover:text-white transition-colors disabled:opacity-50"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
-          </button>
-        </div>
+        <button
+          onClick={handleGenerateReport}
+          disabled={generatingReport || !selectedProjectId}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium px-5 py-2.5 rounded-md transition-colors shadow-lg shadow-blue-900/30"
+        >
+          {generatingReport ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <FileBarChart className="w-4 h-4" />
+          )}
+          Generate Executive Report
+        </button>
       </div>
 
+      {/* Project selector + refresh */}
+      <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <label htmlFor="proj" className="text-sm font-medium text-slate-300 whitespace-nowrap">
+          Project:
+        </label>
+        {loadingProjects ? (
+          <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+        ) : (
+          <select
+            id="proj"
+            value={selectedProjectId}
+            onChange={(e) => setSelectedProjectId(e.target.value)}
+            className="flex-1 bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-600"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} — {p.client}
+              </option>
+            ))}
+          </select>
+        )}
+        <button
+          onClick={() => selectedProjectId && calculateRisk(selectedProjectId)}
+          disabled={loadingRisk || !selectedProjectId}
+          title="Refresh risk"
+          className="p-2 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-md transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${loadingRisk ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+
+      {/* Banners */}
       {error && (
-        <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-lg text-xs font-mono text-red-400 break-words">
-          SYSTEM_ERROR_STATE: {error}
+        <div className="flex items-start gap-2 p-3 bg-red-950/40 border border-red-900/50 rounded-lg text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+      {success && (
+        <div className="flex items-start gap-2 p-3 bg-emerald-950/30 border border-emerald-900/40 rounded-lg text-xs text-emerald-400">
+          <FileBarChart className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{success}</span>
         </div>
       )}
 
-      {summary && (
+      {!selectedProjectId ? (
+        <div className="text-center py-16 text-slate-500">
+          <LayoutDashboard className="w-12 h-12 mx-auto mb-4 opacity-30" />
+          <p>Select a project to view your risk dashboard.</p>
+        </div>
+      ) : loadingRisk ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+          <p className="text-sm text-slate-500">Calculating financial exposure…</p>
+        </div>
+      ) : risk ? (
         <>
-          {/* Metric cards from real backend fields */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <MetricCard
-              title="Total Projects"
-              value={summary.total_projects}
-              icon={<Briefcase className="w-5 h-5" />}
+          {/* Risk severity banner */}
+          <div
+            className={`flex items-center gap-3 p-4 rounded-lg border ${
+              severity === "CRITICAL"
+                ? "bg-red-950/40 border-red-900/50"
+                : severity === "HIGH"
+                  ? "bg-orange-950/30 border-orange-900/40"
+                  : severity === "MODERATE"
+                    ? "bg-amber-950/30 border-amber-900/40"
+                    : "bg-emerald-950/30 border-emerald-900/40"
+            }`}
+          >
+            <AlertTriangle
+              className={`w-6 h-6 ${
+                severity === "CRITICAL"
+                  ? "text-red-400"
+                  : severity === "HIGH"
+                    ? "text-orange-400"
+                    : severity === "MODERATE"
+                      ? "text-amber-400"
+                      : "text-emerald-400"
+              }`}
             />
-            <MetricCard
-              title="Total Budget Managed"
-              value={formatCurrency(summary.total_budget_managed)}
-              icon={<ShieldCheck className="w-5 h-5" />}
-            />
-            <MetricCard
-              title="Total Financial Exposure"
-              value={formatCurrency(summary.total_financial_exposure)}
-              icon={<AlertTriangle className="w-5 h-5" />}
-              isNegativeGood
-            />
-            <MetricCard
-              title="Overall Compliance Score"
-              value={formatPercent(summary.overall_compliance_score)}
-              icon={<Activity className="w-5 h-5" />}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Exposure chart sourced from top_risk_projects */}
-            <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-sm font-semibold text-slate-200 mb-1">Top Risk Projects — Exposure</h3>
-              <p className="text-xs text-slate-500 mb-4">
-                Financial exposure per top-risk project (red &gt; 1M, orange &gt; 100K).
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-slate-200">
+                Risk Severity: {severity}
               </p>
-              <ExposureChart data={topRisks} />
-            </div>
-
-            {/* Compliance breakdown */}
-            <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-col">
-              <div className="flex items-center gap-2 mb-4">
-                <ListChecks className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-sm font-semibold text-slate-200">Compliance Breakdown</h3>
-              </div>
-              <div className="flex-1 space-y-3">
-                <BreakdownRow label="Open flags" value={breakdown?.open_flags ?? 0} tone="red" />
-                <BreakdownRow
-                  label="Resolved flags"
-                  value={breakdown?.resolved_flags ?? 0}
-                  tone="emerald"
-                />
-                <BreakdownRow
-                  label="Waived flags"
-                  value={breakdown?.waived_flags ?? 0}
-                  tone="amber"
-                />
-                <div className="pt-3 mt-3 border-t border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs uppercase tracking-wider text-slate-500 font-medium">
-                      Total flags
-                    </span>
-                    <span className="text-lg font-mono font-bold text-slate-100">
-                      {breakdown?.total_flags ?? 0}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Top risk projects table */}
-          <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-800">
-              <h3 className="text-sm font-semibold text-slate-200">Top Risk Projects</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Projects with the highest exposure and flag counts.
+              <p className="text-xs text-slate-400 mt-0.5">
+                {risk.executive_summary || "No summary available."}
               </p>
             </div>
-            {topRisks.length === 0 ? (
-              <div className="p-10 text-center text-sm text-slate-500">
-                No risk-bearing projects detected.
+            <span
+              className={`text-xs px-3 py-1 rounded font-medium ${
+                SEVERITY_STYLES[severity] ?? "bg-slate-800 text-slate-400"
+              }`}
+            >
+              {severity}
+            </span>
+          </div>
+
+          {/* Metric cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Total Financial Exposure */}
+            <MetricCard
+              label="Total Financial Exposure"
+              value={formatSAR(totalExposure)}
+              icon={<Wallet className="w-5 h-5 text-red-400" />}
+              accent="red"
+              sublabel={`Mandatory penalties: ${formatSAR(mandatoryExposure)}`}
+            />
+
+            {/* Payroll Leakage */}
+            <MetricCard
+              label="Payroll Leakage (LCP 46.6%)"
+              value={formatSAR(payrollLeakage)}
+              icon={<TrendingDown className="w-5 h-5 text-amber-400" />}
+              accent="amber"
+              sublabel={`Recognition factor: ${((risk.payroll_recognition_factor ?? 0.534) * 100).toFixed(1)}%`}
+            />
+
+            {/* Current Gap Indicator */}
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-5 h-5 text-blue-400" />
+                <p className="text-[11px] uppercase tracking-wider text-slate-500">
+                  Current Compliance Gap
+                </p>
               </div>
-            ) : (
-              <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 sticky top-0">
-                    <tr>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
-                        Project
-                      </th>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
-                        Exposure
-                      </th>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">
-                        Flags
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50">
-                    {topRisks.map((p) => (
-                      <tr key={p.project_id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="px-6 py-3">
-                          <div className="font-medium text-slate-200">{p.project_name || "—"}</div>
-                          <div className="text-xs text-slate-500 font-mono mt-0.5">
-                            {p.project_id}
-                          </div>
-                        </td>
-                        <td className="px-6 py-3 font-mono font-semibold text-slate-100">
-                          {formatCurrency(p.project_exposure)}
-                        </td>
-                        <td className="px-6 py-3">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-md text-xs font-medium border ${
-                              p.flag_count > 5
-                                ? "bg-red-950/50 text-red-400 border-red-900/50"
-                                : p.flag_count > 0
-                                  ? "bg-orange-950/50 text-orange-400 border-orange-900/50"
-                                  : "bg-emerald-950/50 text-emerald-400 border-emerald-900/50"
-                            }`}
-                          >
-                            {p.flag_count}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="flex items-end justify-between mb-3">
+                <p className="text-2xl font-mono font-bold text-slate-100">
+                  {gapPct.toFixed(1)}%
+                </p>
+                <span className="text-xs text-slate-500">exposure ratio</span>
               </div>
-            )}
+              {/* Progress bar */}
+              <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-700 ${
+                    gapPct > 75
+                      ? "bg-red-500"
+                      : gapPct > 50
+                        ? "bg-orange-500"
+                        : gapPct > 25
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                  }`}
+                  style={{ width: `${Math.min(gapPct, 100)}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-500 mt-2">
+                Lower is better — reflects your exposure before competitor analysis.
+              </p>
+            </div>
+          </div>
+
+          {/* Mitigation actions */}
+          {risk.mitigation_actions && risk.mitigation_actions.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
+              <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">
+                Recommended Mitigation Actions
+              </h2>
+              <ul className="space-y-2">
+                {risk.mitigation_actions.map((action, idx) => (
+                  <li
+                    key={idx}
+                    className="flex items-start gap-2 text-sm text-slate-300"
+                  >
+                    <ChevronRight className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                    <span>{action}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Next steps CTA */}
+          <div className="bg-gradient-to-r from-slate-900 to-slate-950 border border-slate-800 rounded-lg p-6 flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-200 mb-1">
+                Ready to test against competitors?
+              </h3>
+              <p className="text-xs text-slate-500">
+                Once your self-audit is complete, head to the Bid Evaluation engine to simulate your win probability.
+              </p>
+            </div>
+            <a
+              href="/dashboard/evaluations"
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            >
+              Go to Bid Evaluation
+              <ChevronRight className="w-4 h-4" />
+            </a>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }
 
-interface BreakdownRowProps {
+function MetricCard({
+  label,
+  value,
+  icon,
+  accent,
+  sublabel,
+}: {
   label: string;
-  value: number;
-  tone: "red" | "emerald" | "amber";
-}
+  value: string;
+  icon: React.ReactNode;
+  accent: "red" | "amber" | "blue";
+  sublabel?: string;
+}) {
+  const accentCls =
+    accent === "red"
+      ? "border-red-900/40"
+      : accent === "amber"
+        ? "border-amber-900/40"
+        : "border-blue-900/40";
 
-function BreakdownRow({ label, value, tone }: BreakdownRowProps) {
-  const toneClasses: Record<BreakdownRowProps["tone"], string> = {
-    red: "text-red-400 bg-red-950/30 border-red-900/40",
-    emerald: "text-emerald-400 bg-emerald-950/30 border-emerald-900/40",
-    amber: "text-amber-400 bg-amber-950/30 border-amber-900/40",
-  };
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg border border-slate-800/80 bg-slate-950/40">
-      <span className="text-xs text-slate-300">{label}</span>
-      <span className={`text-sm font-mono font-bold px-2 py-0.5 rounded border ${toneClasses[tone]}`}>
-        {value}
-      </span>
+    <div className={`bg-slate-900 border ${accentCls} rounded-lg p-5`}>
+      <div className="flex items-center gap-2 mb-3">
+        {icon}
+        <p className="text-[11px] uppercase tracking-wider text-slate-500">{label}</p>
+      </div>
+      <p className="text-2xl font-mono font-bold text-slate-100">{value}</p>
+      {sublabel && <p className="text-xs text-slate-500 mt-2">{sublabel}</p>}
     </div>
   );
 }
-

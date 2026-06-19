@@ -1,264 +1,423 @@
-// src/app/dashboard/uploads/page.tsx
-
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Folder, Trash2, FileText, CheckCircle2, AlertCircle } from "lucide-react";
-import DragDrop from "@/components/uploads/DragDrop";
-import ProgressBar from "@/components/uploads/ProgressBar";
-import { uploadService } from "@/lib/uploadService";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  UploadCloud,
+  FileSpreadsheet,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Trash2,
+  Play,
+  FileText,
+} from "lucide-react";
 import { projectService } from "@/lib/projectService";
-import { UploadedFile } from "@/types/upload";
-import { Project } from "@/types/project";
+import { uploadService } from "@/lib/uploadService";
+import { parsingService, type BoQItem } from "@/lib/parsingService";
+import type { Project } from "@/types/project";
+import type { UploadedFile } from "@/types/upload";
 
-const formatDate = (iso?: string): string => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
-};
+const ACCEPTED_EXTS = [".csv", ".xlsx", ".xls"];
 
-export default function UploadCenterPage() {
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+export default function UploadsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [boqItems, setBoqItems] = useState<BoQItem[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [parsingId, setParsingId] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [uploadingFile, setUploadingFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [statusMsg, setStatusMsg] = useState<{ type: "error" | "success"; text: string } | null>(null);
-
-  // FE-15: wrap loader in useCallback so it can be a stable dep of useEffect.
-  const fetchProjects = useCallback(async () => {
+  // Load projects
+  const loadProjects = useCallback(async () => {
+    setLoadingProjects(true);
     try {
       const data = await projectService.getAllProjects({ skip: 0, limit: 100 });
       setProjects(data);
-      if (data.length > 0) {
-        setSelectedProjectId(data[0].id);
-      }
-    } catch {
-      setStatusMsg({ type: "error", text: "Failed to fetch project scopes." });
+      if (data.length > 0) setSelectedProjectId(data[0].id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load projects.");
+    } finally {
+      setLoadingProjects(false);
     }
   }, []);
 
-  // Initialize Projects
   useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
+    loadProjects();
+  }, [loadProjects]);
 
-  // FE-15: wrap files loader in useCallback; takes projectId as arg so it
-  // can be a stable dep of the selectedProjectId effect.
-  const fetchFiles = useCallback(async (projectId: string) => {
+  // Load files when project changes
+  const loadFiles = useCallback(async (projectId: string) => {
+    if (!projectId) return;
     setLoadingFiles(true);
+    setError(null);
     try {
       const data = await uploadService.getFilesByProject(projectId, {
         skip: 0,
         limit: 100,
       });
-      setFiles(Array.isArray(data) ? data : []);
+      setFiles(data);
     } catch {
-      setStatusMsg({ type: "error", text: "Failed to retrieve uploaded files." });
+      setFiles([]);
     } finally {
       setLoadingFiles(false);
     }
   }, []);
 
-  // Fetch Files on Project Change
   useEffect(() => {
-    if (!selectedProjectId) return;
-    fetchFiles(selectedProjectId);
-  }, [selectedProjectId, fetchFiles]);
+    if (selectedProjectId) loadFiles(selectedProjectId);
+    else {
+      setFiles([]);
+      setBoqItems([]);
+    }
+  }, [selectedProjectId, loadFiles]);
 
-  const handleFileUpload = async (file: File) => {
+  // Upload + parse handler
+  const handleFile = async (file: File) => {
     if (!selectedProjectId) {
-      setStatusMsg({ type: "error", text: "Target project must be selected." });
+      setError("Please select a project first.");
+      return;
+    }
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (!ACCEPTED_EXTS.includes(ext)) {
+      setError(`Unsupported file type: ${ext}. Use CSV or Excel.`);
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setError("File exceeds 25 MB limit.");
       return;
     }
 
-    setUploadingFile(file);
-    setUploadProgress(0);
-    setStatusMsg(null);
+    setUploading(true);
+    setProgress(0);
+    setError(null);
+    setSuccess(null);
 
     try {
-      const newFile = await uploadService.uploadFileWithProgress(file, selectedProjectId, (p) =>
-        setUploadProgress(p),
+      // 1. Upload
+      const uploaded = await uploadService.uploadFileWithProgress(
+        file,
+        selectedProjectId,
+        (pct) => setProgress(pct),
       );
-      setFiles((prev) => [newFile, ...prev]);
-      setStatusMsg({ type: "success", text: "File uploaded successfully." });
+      setSuccess(`Uploaded "${uploaded.original_filename}" successfully.`);
+
+      // Refresh file list
+      await loadFiles(selectedProjectId);
+
+      // 2. Parse (only Excel/CSV — skip PDF)
+      if (uploaded.file_type === "csv" || uploaded.file_type === "excel") {
+        setParsingId(uploaded.id);
+        const result = await parsingService.parseBoq(uploaded.id);
+        setBoqItems(result.items);
+        setSuccess(
+          `Parsed ${result.parsed_rows} rows from "${uploaded.original_filename}".`,
+        );
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Upload failed.";
-      setStatusMsg({ type: "error", text: msg });
+      setError(err instanceof Error ? err.message : "Upload/parse failed.");
     } finally {
-      setTimeout(() => setUploadingFile(null), 600);
+      setUploading(false);
+      setParsingId(null);
     }
   };
 
-  const handleDeleteFile = async (id: string) => {
-    setDeletingId(id);
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFile(file);
+  };
+
+  const handleDelete = async (fileId: string) => {
+    if (!confirm("Delete this file? This cannot be undone.")) return;
     try {
-      await uploadService.deleteFile(id);
-      setFiles((prev) => prev.filter((f) => f.id !== id));
-      setStatusMsg({ type: "success", text: "File deleted." });
+      await uploadService.deleteFile(fileId);
+      await loadFiles(selectedProjectId);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to delete file.";
-      setStatusMsg({ type: "error", text: msg });
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    }
+  };
+
+  const handleParseExisting = async (fileId: string) => {
+    setParsingId(fileId);
+    setError(null);
+    try {
+      const result = await parsingService.parseBoq(fileId);
+      setBoqItems(result.items);
+      setSuccess(`Parsed ${result.parsed_rows} rows.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Parse failed.");
     } finally {
-      setDeletingId(null);
+      setParsingId(null);
     }
   };
 
   return (
-    <div className="max-w-5xl mx-auto animate-in fade-in duration-500 space-y-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-100 tracking-tight">Upload Center</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Ingest and manage compliance evidence documents for each project scope.
-        </p>
+    <div className="max-w-7xl mx-auto animate-in fade-in duration-500 space-y-6">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-blue-900/30 border border-blue-800/50 flex items-center justify-center">
+          <UploadCloud className="w-5 h-5 text-blue-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-slate-100">Upload Center</h1>
+          <p className="text-xs text-slate-500">
+            Upload your BoQ (Excel/CSV) — the system parses it into line items for compliance scanning.
+          </p>
+        </div>
       </div>
 
-      {statusMsg && (
-        <div
-          className={`flex items-center gap-2 p-3 text-sm rounded-lg border ${
-            statusMsg.type === "error"
-              ? "bg-red-950/40 text-red-400 border-red-900/50"
-              : "bg-emerald-950/40 text-emerald-400 border-emerald-900/50"
-          }`}
-        >
-          {statusMsg.type === "error" ? (
-            <AlertCircle className="w-4 h-4 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-          )}
-          {statusMsg.text}
+      {/* Project selector */}
+      <div className="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-lg p-4">
+        <label htmlFor="proj" className="text-sm font-medium text-slate-300 whitespace-nowrap">
+          Project:
+        </label>
+        {loadingProjects ? (
+          <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+        ) : projects.length === 0 ? (
+          <span className="text-sm text-slate-500">No projects available.</span>
+        ) : (
+          <select
+            id="proj"
+            value={selectedProjectId}
+            onChange={(e) => setSelectedProjectId(e.target.value)}
+            className="flex-1 bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-600"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} — {p.client}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* Banners */}
+      {error && (
+        <div className="flex items-start gap-2 p-3 bg-red-950/40 border border-red-900/50 rounded-lg text-xs text-red-400">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+      {success && (
+        <div className="flex items-start gap-2 p-3 bg-emerald-950/30 border border-emerald-900/40 rounded-lg text-xs text-emerald-400">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{success}</span>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left Column: Upload UI */}
-        <div className="md:col-span-1 space-y-4">
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
-            <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
-              Target Project
-            </label>
-            <select
-              value={selectedProjectId}
-              onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500 transition-colors mb-4"
-              disabled={!!uploadingFile}
-            >
-              <option value="" disabled>
-                Select a project
-              </option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-
-            <DragDrop onFileSelect={handleFileUpload} disabled={!selectedProjectId || !!uploadingFile} />
-
-            {uploadingFile && (
-              <ProgressBar progress={uploadProgress} filename={uploadingFile.name} />
-            )}
-          </div>
+      {!selectedProjectId ? (
+        <div className="text-center py-16 text-slate-500">
+          <UploadCloud className="w-12 h-12 mx-auto mb-4 opacity-30" />
+          <p>Select a project to start uploading.</p>
         </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* ── LEFT: Drop zone + upload progress ───────────────────── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
+            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">
+              Upload BoQ File
+            </h2>
 
-        {/* Right Column: Files List */}
-        <div className="md:col-span-2">
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden shadow-xl min-h-[400px] flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/80 flex justify-between items-center">
-              <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                <Folder className="w-4 h-4 text-blue-500/70" />
-                Uploaded Files
-              </h3>
-              <span className="text-xs text-slate-500 bg-slate-900 px-2 py-1 rounded-md border border-slate-800">
-                {files.length} {files.length === 1 ? "file" : "files"}
-              </span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto max-h-[640px] custom-scrollbar">
-              {loadingFiles ? (
-                <div className="p-6 space-y-4">
-                  {[...Array(3)].map((_, i) => (
-                    <div key={i} className="flex justify-between items-center animate-pulse">
-                      <div className="flex gap-3 items-center w-full">
-                        <div className="w-8 h-8 bg-slate-800 rounded-lg"></div>
-                        <div className="space-y-2 flex-1">
-                          <div className="h-3 bg-slate-800 rounded w-1/3"></div>
-                          <div className="h-2 bg-slate-800 rounded w-1/4"></div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : files.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-center px-4">
-                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 mb-4 text-slate-600">
-                    <FileText className="w-6 h-6" />
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`cursor-pointer border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                dragOver
+                  ? "border-blue-500 bg-blue-950/20"
+                  : "border-slate-700 hover:border-slate-600 bg-slate-950"
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleFile(f);
+                  e.target.value = "";
+                }}
+              />
+              {uploading ? (
+                <div className="space-y-3">
+                  <Loader2 className="w-10 h-10 mx-auto animate-spin text-blue-400" />
+                  <p className="text-sm text-slate-300">Uploading… {progress}%</p>
+                  <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-blue-600 h-full transition-all duration-200"
+                      style={{ width: `${progress}%` }}
+                    />
                   </div>
-                  <h4 className="text-sm font-medium text-slate-300">No files uploaded yet</h4>
-                  <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                    Upload a CSV / XLSX / PDF to start building compliance evidence.
-                  </p>
                 </div>
               ) : (
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800 sticky top-0">
-                    <tr>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">Filename</th>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">Type</th>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">Uploaded By</th>
-                      <th className="px-6 py-3 font-medium uppercase tracking-wider text-xs">Uploaded At</th>
-                      <th className="px-6 py-3 font-medium text-right uppercase tracking-wider text-xs">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50">
-                    {files.map((file) => (
-                      <tr key={file.id} className="hover:bg-slate-800/30 transition-colors group">
-                        <td className="px-6 py-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-blue-950/30 text-blue-400 rounded-lg border border-blue-900/30 shrink-0">
-                              <FileText className="w-4 h-4" />
-                            </div>
-                            <span className="text-slate-200 font-medium truncate max-w-[260px]">
-                              {file.original_filename || "—"}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-3">
-                          <span className="px-2 py-0.5 rounded-md text-xs font-mono text-slate-300 bg-slate-950 border border-slate-800">
-                            {file.file_type || "—"}
-                          </span>
-                        </td>
-                        <td className="px-6 py-3 text-slate-400 font-mono text-xs">
-                          {file.uploaded_by ? file.uploaded_by.slice(0, 8) : "—"}
-                        </td>
-                        <td className="px-6 py-3 text-slate-400 text-xs">
-                          {formatDate(file.uploaded_at)}
-                        </td>
-                        <td className="px-6 py-3 text-right">
-                          <button
-                            onClick={() => handleDeleteFile(file.id)}
-                            disabled={deletingId === file.id}
-                            className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-950/40 rounded-lg transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="Delete file"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="space-y-2">
+                  <FileSpreadsheet className="w-10 h-10 mx-auto text-slate-500" />
+                  <p className="text-sm text-slate-300 font-medium">
+                    Drop your BoQ file here, or click to browse
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Accepted: .csv, .xlsx, .xls — Max 25 MB
+                  </p>
+                </div>
               )}
             </div>
           </div>
+
+          {/* ── RIGHT: Uploaded files list ─────────────────────────── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
+            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">
+              Uploaded Files ({files.length})
+            </h2>
+            {loadingFiles ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-slate-500" />
+              </div>
+            ) : files.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-8">
+                No files uploaded yet.
+              </p>
+            ) : (
+              <ul className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {files.map((f) => (
+                  <li
+                    key={f.id}
+                    className="flex items-center gap-3 p-3 bg-slate-950 border border-slate-800 rounded-md"
+                  >
+                    <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-slate-200 truncate">
+                        {f.original_filename}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {f.file_type} · {formatDate(f.uploaded_at)}
+                      </p>
+                    </div>
+                    {(f.file_type === "csv" || f.file_type === "excel") && (
+                      <button
+                        onClick={() => handleParseExisting(f.id)}
+                        disabled={parsingId === f.id}
+                        title="Parse as BoQ"
+                        className="p-1.5 text-blue-400 hover:text-blue-300 hover:bg-slate-800 rounded-md transition-colors disabled:opacity-50"
+                      >
+                        {parsingId === f.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDelete(f.id)}
+                      title="Delete"
+                      className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-md transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ── Parsed BoQ items preview ────────────────────────────── */}
+      {boqItems.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-6">
+          <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">
+            Parsed BoQ Items ({boqItems.length})
+          </h2>
+          <div className="overflow-x-auto max-h-96">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-900">
+                <tr className="text-xs text-slate-500 uppercase border-b border-slate-800">
+                  <th className="text-left py-2 px-2 font-medium">Item Code</th>
+                  <th className="text-left py-2 px-2 font-medium">Description</th>
+                  <th className="text-right py-2 px-2 font-medium">Qty</th>
+                  <th className="text-right py-2 px-2 font-medium">Unit Price</th>
+                  <th className="text-right py-2 px-2 font-medium">Total</th>
+                  <th className="text-center py-2 px-2 font-medium">Sourcing</th>
+                </tr>
+              </thead>
+              <tbody>
+                {boqItems.map((item) => (
+                  <tr
+                    key={item.id}
+                    className="border-b border-slate-800/50 hover:bg-slate-800/30"
+                  >
+                    <td className="py-2 px-2 font-mono text-xs text-slate-400">
+                      {item.item_code || "—"}
+                    </td>
+                    <td className="py-2 px-2 text-slate-300 max-w-xs truncate">
+                      {item.description || "—"}
+                    </td>
+                    <td className="py-2 px-2 text-right text-slate-400">
+                      {item.quantity}
+                    </td>
+                    <td className="py-2 px-2 text-right text-slate-400">
+                      {new Intl.NumberFormat("en-US", {
+                        style: "currency",
+                        currency: "SAR",
+                        maximumFractionDigits: 0,
+                      }).format(item.unit_price)}
+                    </td>
+                    <td className="py-2 px-2 text-right text-slate-200 font-mono">
+                      {new Intl.NumberFormat("en-US", {
+                        style: "currency",
+                        currency: "SAR",
+                        maximumFractionDigits: 0,
+                      }).format(item.total_price)}
+                    </td>
+                    <td className="py-2 px-2 text-center">
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                          item.sourcing_type === "imported"
+                            ? "bg-red-900/40 text-red-400"
+                            : "bg-emerald-900/40 text-emerald-400"
+                        }`}
+                      >
+                        {item.sourcing_type}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,16 +1,9 @@
-// src/lib/reportingService.ts
+// gbi-scios-frontend/lib/reportingService.ts
 
 import { apiClient, API_BASE_URL } from "./api";
 import { GenerateReportInput, Report, ReportListResponse } from "@/types/report";
 
 export const reportingService = {
-  /**
-   * GET /reporting/project/{projectId}?skip=&limit= → Report[] (or
-   * { reports: Report[], total: number }).
-   *
-   * Audit item C-1/P-18: pass skip/limit. The backend may not honor them
-   * yet; callers should still handle a full-list response.
-   */
   async getReportsByProject(
     projectId: string,
     options?: { skip?: number; limit?: number },
@@ -27,7 +20,6 @@ export const reportingService = {
       },
     );
     if (Array.isArray(response)) return response;
-    // Backend returns { reports: Report[], total: number }
     return (response as ReportListResponse)?.reports ?? (response as { data?: Report[] })?.data ?? [];
   },
 
@@ -48,8 +40,6 @@ export const reportingService = {
       headers,
     });
 
-    // FE-6: central 401 handling — re-use the same redirect behavior even
-    // though we bypass apiClient for the blob download.
     if (response.status === 401) {
       try {
         localStorage.removeItem("access_token");

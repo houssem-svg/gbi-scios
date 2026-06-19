@@ -1,16 +1,9 @@
-// src/lib/uploadService.ts
+// gbi-scios-frontend/lib/uploadService.ts
 
 import { apiClient, API_BASE_URL } from "./api";
 import { UploadedFile } from "@/types/upload";
 
 export const uploadService = {
-  /**
-   * Uploads a single file with (very rough) progress reporting.
-   *
-   * NOTE: the audit flagged the previous `onProgress(10)` then `onProgress(100)`
-   * as fake progress. We keep the same shape (so the UI does not need to
-   * change), but use XMLHttpRequest so we get real `upload.progress` events.
-   */
   uploadFileWithProgress(
     file: File,
     projectId: string,
@@ -39,13 +32,11 @@ export const uploadService = {
           }
         };
       } else {
-        // Fallback for browsers that don't expose upload progress.
         onProgress(10);
       }
 
       xhr.onload = () => {
         if (xhr.status === 401) {
-          // Mirror apiClient's 401 handling.
           try {
             localStorage.removeItem("access_token");
             localStorage.removeItem("user");
@@ -85,13 +76,6 @@ export const uploadService = {
     });
   },
 
-  /**
-   * GET /uploads/project/{projectId}?skip=&limit= → UploadedFile[].
-   *
-   * Audit item C-1/P-18: pass skip/limit so the backend can paginate when
-   * support lands. For now, callers should be prepared to receive the full
-   * list (the backend currently ignores these params).
-   */
   async getFilesByProject(
     projectId: string,
     options?: { skip?: number; limit?: number },
@@ -106,7 +90,6 @@ export const uploadService = {
     });
   },
 
-  /** DELETE /uploads/{id} → 204 No Content */
   async deleteFile(id: string): Promise<void> {
     await apiClient.delete<void>(`/uploads/${id}`);
   },
